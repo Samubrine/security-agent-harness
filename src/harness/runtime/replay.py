@@ -49,6 +49,7 @@ class ReplayWriter:
             request_sha256=sha256_text(request),
             response=response,
             recorded_at=utcnow(),
+            request_text=request,
         )
         self._write(record)
         return record
@@ -133,6 +134,20 @@ class Replayer:
                     self.problems.append(
                         f"observation {obs.id} has an evidence span that does not recompute "
                         f"({ref.artifact} bytes {ref.byte_start}:{ref.byte_end})"
+                    )
+
+        # Every artifact in the run, not only the ones a span happens to cite. A matcher's own
+        # output is evidence for the run even when no observation points at it directly, and
+        # content-addressing is only a guarantee if somebody re-checks the address.
+        artifacts_dir = self.run_dir / "artifacts"
+        if artifacts_dir.is_dir():
+            for path in sorted(artifacts_dir.rglob("*")):
+                if not path.is_file() or path.name.endswith(".meta.json"):
+                    continue
+                digest = f"sha256:{path.name}"
+                if not store.verify_digest(digest):
+                    self.problems.append(
+                        f"artifact {digest[:19]} does not hash to the address it is filed under"
                     )
 
         for finding in self._findings:

@@ -150,6 +150,13 @@ def _integrity(
 
     store = ArtifactStore(run_dir, run_id)
     refs_checked = 0
+    artifacts_dir = run_dir / "artifacts"
+    if artifacts_dir.is_dir():
+        for path in sorted(artifacts_dir.rglob("*")):
+            if not path.is_file() or path.name.endswith(".meta.json"):
+                continue
+            if not store.verify_digest(f"sha256:{path.name}"):
+                problems.append(f"artifact {path.name[:19]} does not hash to its address")
     for raw in observations:
         try:
             observation = Observation.model_validate(raw)

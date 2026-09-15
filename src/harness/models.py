@@ -642,6 +642,11 @@ class ReplayRecord(_Frozen):
     request_sha256: str
     response: Any
     recorded_at: datetime
+    #: The exact request that produced the recorded response, for model turns. Kept alongside the
+    #: digest because design 02 puts prompts in the trace: a replay that can only say "the digest
+    #: does not match" cannot tell a reviewer what changed, and an evaluation of prompt quality
+    #: needs the prompt itself. It is local content the run already held.
+    request_text: str | None = None
 
     def to_jsonl(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

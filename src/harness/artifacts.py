@@ -57,6 +57,9 @@ class ArtifactStore:
         self._run_id = run_id
         self._max_bytes = int(max_bytes)
         self._artifacts = self._root / "artifacts"
+        # Memo of artifacts whose bytes were already confirmed to hash to their address, so
+        # verifying many spans in one artifact does not re-read it many times.
+        self._verified_digests: set[str] = set()
 
     # -- layout ----------------------------------------------------------------------
 
@@ -213,8 +216,14 @@ class ArtifactStore:
         blanket ``except`` and turn a failed check into an accepted finding. A boolean makes the
         failure mode impossible to misread, and an empty ``span_sha256`` is treated as
         unverifiable rather than as "nothing to check".
+
+        The artifact's own address is checked first. A span can still match after bytes are appended
+        past its end, so span equality alone would call a tampered artifact intact -- and the whole
+        provenance argument rests on artifacts being immutable and content-addressed.
         """
         if not ref.span_sha256:
+            return False
+        if not self.verify_digest(ref.artifact):
             return False
         try:
             raw = self.get(ref.artifact)
@@ -223,6 +232,25 @@ class ArtifactStore:
         if ref.byte_start < 0 or ref.byte_end < ref.byte_start or ref.byte_end > len(raw):
             return False
         return ref.compute_span_sha256(raw) == ref.span_sha256
+
+    def verify_digest(self, digest: str) -> bool:
+        """Does the stored file still hash to the address it is filed under?
+
+        Hashed once per store instance per artifact: a run may cite one artifact from many spans and
+        re-reading megabytes per citation would make verification the most expensive part of a replay.
+        """
+        if not digest:
+            return False
+        if digest in self._verified_digests:
+            return True
+        try:
+            raw = self.get(digest)
+        except HarnessError:
+            return False
+        if f"sha256:{sha256_hex(raw)}" != digest:
+            return False
+        self._verified_digests.add(digest)
+        return True
 
 
 class ProvenanceLog:
