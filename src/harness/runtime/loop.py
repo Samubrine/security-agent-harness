@@ -130,6 +130,10 @@ class InvestigationLoop:
         self.state = RunState(run_id=config.run_id)
         self._started_at: datetime = utcnow()
         self._telemetry: list[Any] = []
+        # One entry per attempted provider call, carrying the arguments that were proposed. A
+        # planner needs the arguments to tell "I already read auth.log" from "I still have not read
+        # nginx_access.log"; two calls can share one grant and differ only in their arguments.
+        self._attempts: list[dict[str, Any]] = []
         self._last_gap_count = 0
         self._last_finding_ids: set[str] = set()
 
@@ -529,6 +533,15 @@ class InvestigationLoop:
         # first call for a need.
         self.state.cache[cache_key(provider_id, proposal.capability)] = result
         self.state.cache[provider_id] = result
+        self._attempts.append(
+            {
+                "capability": proposal.capability,
+                "provider": provider_id,
+                "grant": proposal.grant,
+                "args": dict(proposal.args),
+                "exit_status": result.exit_status,
+            }
+        )
         self.events.append(
             "PROVIDER_COMPLETED",
             {"provider": provider_id, "capability": proposal.capability, "execution": execution.id},
@@ -760,15 +773,7 @@ class InvestigationLoop:
                 if obs.kind == "vulnerability_match"
             ],
             "gaps": [{"id": g.id, "kind": g.kind, "impact": g.impact} for g in self.state.gaps],
-            "executed": [
-                {
-                    "capability": execution.capability,
-                    "provider": execution.provider,
-                    "grant": execution.grant,
-                    "exit_status": execution.exit_status,
-                }
-                for execution in self.state.executions
-            ],
+            "executed": list(self._attempts),
             "denied": [item for item in self.state.rejected_proposals if item.get("denied")],
             "capabilities": [
                 {

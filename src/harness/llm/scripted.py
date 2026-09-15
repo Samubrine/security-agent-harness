@@ -96,11 +96,16 @@ class ScriptedModelClient:
         self, digest: Mapping[str, Any], capabilities: list[dict[str, Any]]
     ) -> AgentTurn:
         observed_kinds = {str(obs.get("kind")) for obs in digest.get("observations") or []}
-        # Progress is tracked per (capability, grant), not per capability: a call that failed is
-        # still worth retrying on the same grant, while a call that completed moves on to the next
-        # offered grant (for example, the second log file).
+        # Progress is tracked per (capability, grant, arguments), not per capability. Two offered
+        # variants can share one grant and differ only in their arguments -- reading auth.log and
+        # then nginx_access.log is one grant and two calls -- so keying on the grant alone would
+        # make the second file look already-read and silently truncate the evidence.
         completed = {
-            (str(e.get("capability")), str(e.get("grant")))
+            (
+                str(e.get("capability")),
+                str(e.get("grant")),
+                canonical_json(e.get("args") or {}),
+            )
             for e in digest.get("executed") or []
             if e.get("exit_status") == "completed"
         }
@@ -129,7 +134,14 @@ class ScriptedModelClient:
                 continue
             if name in denied:
                 continue
-            grant = next((g for g in grants if (name, str(g.get("grant"))) not in completed), None)
+            grant = next(
+                (
+                    g
+                    for g in grants
+                    if (name, str(g.get("grant")), canonical_json(g.get("args") or {})) not in completed
+                ),
+                None,
+            )
             if grant is None:
                 continue
             proposal = CapabilityProposal(
