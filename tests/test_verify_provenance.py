@@ -44,6 +44,7 @@ NECESSITY_A = "d-8f1af2d33084"
 NECESSITY_B = "d-a081bed88f0d"
 POLICY_A = "pd-98cec9e2eaaa"
 GRANT_A = "g-50c3fd8d5cbe"
+GRANT_B = "g-28ce69ff332f"
 OBS_A = "o-16128d8f6404"
 
 _NOW = datetime(2026, 9, 15, 6, 0, 0, tzinfo=UTC)
@@ -51,9 +52,31 @@ _NOW = datetime(2026, 9, 15, 6, 0, 0, tzinfo=UTC)
 
 @pytest.fixture
 def run(repo_root: Path, tmp_path: Path) -> Path:
-    """A writable copy of a real recorded run directory."""
+    """A writable copy of a real recorded run directory, shaped like a v1.1 run.
+
+    ``grants.json`` is written in because a v1.1 run records the grants it minted, and grant ids come
+    from ``new_id`` - they cannot be re-derived from the scope record, so an audit of a directory
+    without the file correctly reports ``grants_record_absent`` and cannot check grant references at
+    all. The committed directory predates the file, which is exactly the v1 shape two tests below
+    deliberately reproduce by removing it again.
+    """
     dst = tmp_path / "run"
     shutil.copytree(repo_root / "eval" / "results" / "port_scan" / "run", dst)
+    atomic_write_json(
+        dst / "grants.json",
+        [
+            {
+                "id": grant_id,
+                "resource": "net:10.77.0.11",
+                "alias": "lab-web-01",
+                "capabilities": ["service.enumerate", "vulnerability.match"],
+                "expires_at": "2027-01-01T00:00:00Z",
+                "origin": "test fixture",
+                "kind": "net",
+            }
+            for grant_id in (GRANT_A, GRANT_B)
+        ],
+    )
     return dst
 
 
@@ -494,6 +517,8 @@ def test_policy_record_pointing_at_a_non_citing_execution_warns(run: Path) -> No
 
 
 def test_unknown_grant_is_caught_when_scope_carries_grants(run: Path) -> None:
+    # The scope fallback is what is under test, so the preferred source is removed first.
+    (run / "grants.json").unlink()
     scope = read_json(run / "scope.json")
     assert "grants" not in scope  # the committed scope has none, hence the clean run above
     scope["grants"] = [

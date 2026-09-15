@@ -274,6 +274,56 @@ def test_every_execution_resolves_to_a_persisted_policy_decision(lab_environment
     assert all(e["data"].get("policy_decision_id") in persisted for e in decided)
 
 
+def test_a_fabricated_grant_is_caught_on_a_real_run(lab_environment) -> None:
+    """The grant reference, end to end. Grant ids are randomly minted, so the run must record
+    them: re-minting from the scope record on a later day yields different ids and every
+    execution would look unknown."""
+    from harness.runtime.verify import audit_run_dir
+
+    artifacts = execute_run(
+        lab_environment.request(
+            objective="Enumerate exposed services on lab-web-01.",
+            skill="port_scan",
+            target_alias="lab-web-01",
+            run_id="run-v11-grants",
+        )
+    )
+    run_dir = artifacts.run_dir
+    clean = audit_run_dir(run_dir)
+    assert clean.ok, [f"{i.code}: {i.detail}" for i in clean.issues]
+    assert clean.checked["grants"] > 0, "a v1.1 run records the grants it minted"
+
+    executions_path = run_dir / "executions.json"
+    rows = json.loads(executions_path.read_text(encoding="utf-8"))
+    rows[0]["grant"] = "g-fabricated"
+    executions_path.write_text(json.dumps(rows), encoding="utf-8")
+
+    tampered = audit_run_dir(run_dir)
+    assert not tampered.ok
+    assert "execution_grant_unknown" in tampered.codes()
+
+
+def test_a_v1_run_says_grants_could_not_be_checked(lab_environment) -> None:
+    """A committed v1 run has no grants.json. The audit must say so rather than report a clean
+    grant check over zero grants, which would be a stronger claim than it can support."""
+    from harness.runtime.verify import audit_run_dir
+
+    artifacts = execute_run(
+        lab_environment.request(
+            objective="Enumerate exposed services on lab-web-01.",
+            skill="port_scan",
+            target_alias="lab-web-01",
+            run_id="run-v11-grants-absent",
+        )
+    )
+    (artifacts.run_dir / "grants.json").unlink()
+    audit = audit_run_dir(artifacts.run_dir)
+    assert "grants_record_absent" in audit.codes()
+    assert audit.checked["grants"] == 0
+    # A warning, not an error: a v1 directory is still auditable, just less completely.
+    assert audit.ok
+
+
 def test_the_verifier_accepts_a_run_the_spine_produced(lab_environment) -> None:
     """The producer and the checker agree - the seam that a green unit suite cannot show."""
     from harness.runtime.verify import audit_run_dir

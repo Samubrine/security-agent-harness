@@ -529,26 +529,76 @@ def _policy_ids_from_events(run_dir: Path, issues: list[ProvenanceIssue]) -> set
 
 
 def _load_grants(run_dir: Path, issues: list[ProvenanceIssue]) -> list[Grant]:
-    """Grants live inside ``scope.json``; an unreadable scope is reported, not assumed empty."""
-    path = run_dir / "scope.json"
-    if not path.exists():
-        issues.append(_issue("run_dir_incomplete", "scope.json", "scope.json is absent; grant references cannot be checked"))
+    """The grants the run minted, so an execution's ``grant`` field is resolvable.
+
+    ``grants.json`` is authoritative when present. A v1 run predates it and falls back to a ``grants``
+    key in ``scope.json``, which is also where a hand-assembled directory may carry them.
+
+    The scope record cannot be re-minted into these ids: grant ids come from ``new_id``, so
+    re-deriving them later produces different values and every execution would look unknown. That is
+    why the producer records them.
+
+    When neither source yields a grant, that is reported as a warning rather than returning an empty
+    list in silence. ``execution_grant_unknown`` cannot fire on zero grants, so a caller that
+    believes grant references were checked while holding none would be reading a stronger result
+    than the audit produced.
+    """
+    # Checked first and unconditionally, because the authorisation record is a required run file in
+    # its own right - it is what answers "under whose authority did this happen?" - whether or not
+    # grants.json happens to supply the grant references.
+    scope_path = run_dir / "scope.json"
+    scope_present = scope_path.exists()
+    if not scope_present:
+        issues.append(
+            _issue("run_dir_incomplete", "scope.json", "scope.json is absent; grant references cannot be checked")
+        )
+
+    path = run_dir / "grants.json"
+    if path.exists():
+        raw, parsed = _read_json_value(path, issues)
+        if parsed:
+            if not isinstance(raw, list):
+                issues.append(
+                    _issue("run_dir_unreadable", "grants.json", f"grants.json is {type(raw).__name__}, not a list")
+                )
+            else:
+                recorded = _grants_from_entries(raw, "grants.json", issues)
+                if recorded:
+                    return recorded
+                # An empty grants.json is not authority to stop looking; fall through to the scope.
+
+    if not scope_present:
         return []
-    raw, parsed = _read_json_value(path, issues)
+    raw, parsed = _read_json_value(scope_path, issues)
     if not parsed:
         return []
     if not isinstance(raw, dict):
         issues.append(_issue("run_dir_unreadable", "scope.json", f"scope is {type(raw).__name__}, not an object"))
         return []
-    scope = raw
-    grants_raw = scope.get("grants", [])
+    grants_raw = raw.get("grants", [])
     if not isinstance(grants_raw, list):
         issues.append(_issue("run_dir_unreadable", "scope.json", "grants is not a list"))
         return []
+    out = _grants_from_entries(grants_raw, "scope.json", issues)
+    if not out:
+        issues.append(
+            _issue(
+                "grants_record_absent",
+                "grants.json",
+                "no grants.json and no grants in scope.json, so execution grant references were "
+                "not checked",
+                severity="warning",
+            )
+        )
+    return out
+
+
+def _grants_from_entries(entries: list[Any], source: str, issues: list[ProvenanceIssue]) -> list[Grant]:
+    """Reconstruct grants, reporting each malformed entry instead of dropping the whole file."""
     out: list[Grant] = []
-    for index, entry in enumerate(grants_raw):
+    for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
-            issues.append(_issue("run_dir_unreadable", "scope.json", f"grant {index} is not an object"))
+            issues.append(_issue("run_dir_unreadable", source, f"grant {index} is not an object"))
             continue
         try:
             out.append(Grant.model_validate(entry))
@@ -556,7 +606,7 @@ def _load_grants(run_dir: Path, issues: list[ProvenanceIssue]) -> list[Grant]:
             issues.append(
                 _issue(
                     "run_dir_unreadable",
-                    "scope.json",
+                    source,
                     f"grant {index} does not reconstruct as Grant: {type(exc).__name__}: {_brief(exc)}",
                 )
             )
