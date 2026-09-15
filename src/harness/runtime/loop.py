@@ -39,31 +39,29 @@ from harness.models import (
     RunSummary,
 )
 from harness.providers.base import ProviderRequest, ProviderResult
+from harness.providers.necessity import CAPABILITY_OUTPUT_KINDS, cache_key
 from harness.runtime.fsm import RunState, State
 from harness.util import canonical_json, iso, new_id, utcnow
 
-#: What each capability is expected to produce, used to tell the model (and the scripted planner)
-#: when a need is already met. Kept next to the loop rather than inside the necessity gate
-#: because it is the loop that knows which kinds a *parser* emits for a given call.
+#: Human-facing description and default arguments per capability. The *machine* definition of what
+#: a capability produces lives in ``harness.providers.necessity.CAPABILITY_OUTPUT_KINDS`` and is
+#: read from there, so the catalogue the model sees and the gate that judges it cannot disagree
+#: about what "this need is already met" means.
 CATALOGUE_EXPECTATIONS: dict[str, dict[str, Any]] = {
     "service.enumerate": {
         "expects": "service, product, version and CPE observations for each open port",
-        "expected_kinds": ["scan_meta", "host_state", "service"],
         "args": {"profile": "service_detection"},
     },
     "vulnerability.match": {
         "expects": "candidate CVE observations derived from observed versions",
-        "expected_kinds": ["vulnerability_match"],
         "args": {},
     },
     "log.read": {
         "expects": "parsed authentication and HTTP events with a bounded rollup",
-        "expected_kinds": ["auth_event", "auth_summary", "http_event", "http_summary"],
         "args": {"path": "auth.log"},
     },
     "http.probe": {
         "expects": "HTTP response headers and title observations",
-        "expected_kinds": ["http_probe"],
         "args": {},
     },
 }
@@ -408,6 +406,25 @@ class InvestigationLoop:
         )
 
         approved = True
+        if self.config.dry_run:
+            # Dry run answers "what would happen?" without doing it. The policy verdict above is the
+            # real verdict -- a local read-only call is genuinely permitted -- so the plan stays an
+            # honest rendering rather than a table of everything denied. What dry run removes is the
+            # invocation itself, and the rejection is recorded so the model moves on instead of
+            # re-proposing the same capability until the step budget runs out.
+            self.state.rejected_proposals.append(
+                {
+                    "capability": proposal.capability,
+                    "grant": proposal.grant,
+                    "reason": "dry run: the call was rendered and policy-checked but not executed",
+                    "denied": True,
+                }
+            )
+            self.events.append(
+                "PROVIDER_REJECTED",
+                {"provider": provider_id, "capability": proposal.capability, "reason": "dry_run"},
+            )
+            return False
         if policy_decision.verdict == "ask":
             approved = self._request_approval(provider_id, proposal, policy_decision)
         if policy_decision.verdict == "deny" or not approved:
@@ -507,17 +524,29 @@ class InvestigationLoop:
         self.budgets.success()
         self.state.consecutive_failures = 0
         self.budgets.provider_call()
+        # Recorded so the necessity gate can tell "a provider already ran for this capability"
+        # from "nobody has tried yet", which is the difference between a real coverage gap and the
+        # first call for a need.
+        self.state.cache[cache_key(provider_id, proposal.capability)] = result
+        self.state.cache[provider_id] = result
         self.events.append(
             "PROVIDER_COMPLETED",
             {"provider": provider_id, "capability": proposal.capability, "execution": execution.id},
         )
-        self._parse(result, execution, metadata.digest, spec)
+        self._parse(result, execution, metadata.digest, spec, grant.alias)
         self._goto(State.CORRELATING)
         self._correlate()
         self._goto(State.FINDINGS)
         return True
 
-    def _parse(self, result: ProviderResult, execution: ProviderExecution, digest: str, spec: Any) -> None:
+    def _parse(
+        self,
+        result: ProviderResult,
+        execution: ProviderExecution,
+        digest: str,
+        spec: Any,
+        target_alias: str,
+    ) -> None:
         self._goto(State.PARSING)
         if not result.stdout:
             self._add_gap(
@@ -539,6 +568,9 @@ class InvestigationLoop:
             trust_class=spec.trust_class,
             artifact_digest=digest,
             evidence_of=evidence_of,
+            # The alias, never the resource: it is the only target name the model is allowed to see,
+            # and it is the only one an observation may carry into a prompt.
+            target=target_alias,
         )
         for observation in parsed.observations:
             self.state.observations[observation.id] = observation
@@ -640,7 +672,14 @@ class InvestigationLoop:
                     severity=str(value.get("severity", "unknown")),
                     summary=str(value.get("summary", "")),
                     matched_on=str(value.get("matched_on", "")),
-                    observation_ids=[services[value.get("cpe")]] if value.get("cpe") in services else [obs.id],
+                    # The matcher's own observation first, then the service observation it was
+                    # derived from, so the finding builder can join claims to candidates through
+                    # observation ids rather than through statement text.
+                    observation_ids=(
+                        [obs.id, services[value["cpe"]]]
+                        if value.get("cpe") in services
+                        else [obs.id]
+                    ),
                 )
             )
         return out
@@ -691,7 +730,7 @@ class InvestigationLoop:
                     "capability": capability,
                     "intent_hint": expectation.get("intent_hint", capability),
                     "expects": expectation.get("expects", ""),
-                    "expected_kinds": list(expectation.get("expected_kinds") or []),
+                    "expected_kinds": sorted(CAPABILITY_OUTPUT_KINDS.get(capability) or set()),
                     "grants": offered,
                 }
             )

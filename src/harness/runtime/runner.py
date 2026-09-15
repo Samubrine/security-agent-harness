@@ -36,6 +36,7 @@ from harness.runtime.analysers import (
     CveMatcherProvider,
     parse_vulnerability_json,
 )
+from harness.runtime.capabilities import with_logical_capabilities
 from harness.runtime.loop import InvestigationLoop
 from harness.runtime.replay import ReplayWriter
 from harness.tokens import BudgetGuard, TokenLedger
@@ -107,10 +108,12 @@ def _approval_gate(mode: str, answers: tuple[bool, ...]) -> Any:
 def _register_parsers(parsers: ParserRegistry) -> None:
     """Register the deterministic parsers. A missing implementation is a wiring bug, not a gap."""
     from harness.parsers import auth_log, nmap_xml, nginx_access
+    from harness.parsers.mcp_json import MCP_MEDIA_TYPE, parse_mcp_json
 
     parsers.register("application/nmap+xml", "nmap_xml", nmap_xml.parse_nmap_xml)
     parsers.register("text/x-authlog", "auth_log", auth_log.parse_auth_log)
     parsers.register("text/x-nginx-access", "nginx_access", nginx_access.parse_nginx_access)
+    parsers.register(MCP_MEDIA_TYPE, "mcp_json", parse_mcp_json)
     parsers.register(VULN_MEDIA_TYPE, VULN_PARSER_NAME, parse_vulnerability_json)
 
 
@@ -145,6 +148,10 @@ def _persist(run_dir: Path, run_id: str, config: RunConfig, summary: RunSummary,
 
     observations = [obs.model_dump(mode="json") for obs in sorted(state.observations.values(), key=lambda o: o.id)]
     _write_jsonl(run_dir / "observations.jsonl", observations)
+    # The same records are written once as JSON arrays as well as once as JSONL. The JSONL files are
+    # the append-only working form; the JSON arrays are what the evaluation harness and any external
+    # reader consume, and keeping both means neither has to guess at the other's shape.
+    atomic_write_json(run_dir / "observations.json", observations)
     _write_jsonl(run_dir / "claims.jsonl", [c.model_dump(mode="json") for c in state.claims])
     _write_jsonl(run_dir / "findings.jsonl", [])
     atomic_write_json(run_dir / "findings.json", [f.model_dump(mode="json") for f in state.findings])
@@ -153,9 +160,9 @@ def _persist(run_dir: Path, run_id: str, config: RunConfig, summary: RunSummary,
         run_dir / "provider-decisions.jsonl",
         [d.model_dump(mode="json") for d in state.decisions],
     )
-    _write_jsonl(
-        run_dir / "executions.jsonl", [e.model_dump(mode="json") for e in state.executions]
-    )
+    executions = [e.model_dump(mode="json") for e in state.executions]
+    _write_jsonl(run_dir / "executions.jsonl", executions)
+    atomic_write_json(run_dir / "executions.json", executions)
     _write_jsonl(
         run_dir / "correlations.jsonl", [c.model_dump(mode="json") for c in state.correlations]
     )
@@ -221,6 +228,10 @@ def execute_run(request: RunRequest) -> RunArtifacts:
                 f"authorised aliases: {resolved.aliases()}"
             )
         resolved.grants = GrantBook(filtered)
+    # Compose the logical capability vocabulary onto the minted grants. The scope record speaks
+    # about resources; skills speak about operations; this is the one place that says which
+    # operation a resource kind can serve.
+    resolved.grants = with_logical_capabilities(resolved.grants)
 
     budgets = _budgets_for(resolved.skill)
     model = build_client(
@@ -306,6 +317,12 @@ def execute_run(request: RunRequest) -> RunArtifacts:
         _curate_memory(memory, index, state, events, run_id)
 
     _persist(run_dir, run_id, config, summary, state)
+    # The run directory carries its own authorisation record. A run whose scope record only existed
+    # on the machine that started it could not be audited later, and the scope is the artifact that
+    # answers "under whose authority did this happen?".
+    from harness.util import atomic_write_json as _write_json
+
+    _write_json(run_dir / "scope.json", resolved.scope.model_dump(mode="json"))
 
     from harness.report.build import write_report
 
