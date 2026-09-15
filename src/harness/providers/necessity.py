@@ -140,7 +140,7 @@ class NecessityGate:
                 **base,
             )
 
-        ranked = self._rank(specs, cache=cache or {}, prefer=prefer)
+        ranked = self._rank(specs, prefer=prefer)
         viable = [spec for spec in ranked if spec.id not in failed]
         rejected = {
             spec.id: REASON_FAILED for spec in ranked if spec.id in failed
@@ -303,7 +303,6 @@ class NecessityGate:
         self,
         specs: Sequence[ProviderSpec],
         *,
-        cache: Mapping[str, ProviderResult],
         prefer: str | None,
     ) -> list[ProviderSpec]:
         def key(spec: ProviderSpec) -> tuple[int, int, int, int]:
@@ -329,8 +328,15 @@ class NecessityGate:
         The run still wants one answer to its question, so the verdict is ``single`` while the
         ``expansion_reason`` records why a second call happened at all. That keeps the
         multi-provider metric honest: a retry is visible without being counted as corroboration.
+
+        This only applies when the provider that *would* have been chosen is the one that failed.
+        A failure further down the ranking changes nothing about the minimum sufficient set, and
+        reporting it as a replacement would inflate the expansion count with retries that never
+        happened.
         """
-        if not failed:
+        if not failed or not viable:
+            return None
+        if ranked and ranked[0].id not in failed:
             return None
         return (
             [viable[0].id],
@@ -339,11 +345,17 @@ class NecessityGate:
         )
 
     def _conflict_for(self, capability: str, conflicts: Sequence[Correlation]) -> Correlation | None:
-        prefix = f"{_kind_prefix(capability)}"
+        """The first unresolved conflict whose subject is something this capability produces.
+
+        A correlation key begins with the observation kind it groups, so the test is membership in
+        the capability's declared output kinds rather than a single chosen prefix: picking one kind
+        (say the alphabetically first) would miss a conflict about any of the others.
+        """
+        kinds = CAPABILITY_OUTPUT_KINDS.get(capability) or {capability}
         for correlation in conflicts:
             if correlation.relation != "conflict":
                 continue
-            if correlation.key.startswith(prefix):
+            if correlation.key.split("|", 1)[0] in kinds:
                 return correlation
         return None
 
@@ -373,14 +385,6 @@ class NecessityGate:
         if not missing:
             return None
         return ", ".join(missing)
-
-
-def _kind_prefix(capability: str) -> str:
-    """Correlation keys begin with the observation kind, so map a capability to the kinds it fills."""
-    kinds = CAPABILITY_OUTPUT_KINDS.get(capability) or set()
-    # sorted, not `next(iter(...))`: a set's iteration order varies between processes, and a routing
-    # decision that changes with PYTHONHASHSEED is not a deterministic gate.
-    return sorted(kinds)[0] if kinds else capability
 
 
 def output_kinds(capability: str) -> list[str]:

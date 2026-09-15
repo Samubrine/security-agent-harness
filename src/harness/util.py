@@ -214,10 +214,22 @@ def out_of_scope_ips(text: str, authorised: set[str]) -> list[str]:
 
 
 def safe_relpath(root: Path, candidate: Path) -> Path:
-    """Resolve ``candidate`` under ``root`` or raise. Used by the artifact store and
-    by filesystem-scoped providers to make path traversal a structural error."""
+    """Resolve ``candidate`` under ``root`` or raise.
+
+    Used by filesystem-scoped providers and by scope authorisation to make path traversal a
+    structural error. A candidate containing a parent reference is refused rather than reduced to
+    its basename: silently reading a *different* file that happens to live inside the root would
+    keep the read safe while making the request's outcome something other than what it said, and a
+    traversal attempt is a signal worth surfacing rather than quietly absorbing.
+    """
     root = Path(root).resolve()
-    resolved = (root / Path(candidate).name).resolve() if not Path(candidate).is_absolute() else Path(candidate).resolve()
+    candidate = Path(candidate)
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        if ".." in candidate.parts:
+            raise ValueError(f"path {candidate} contains a parent reference")
+        resolved = (root / candidate).resolve()
     if root != resolved and root not in resolved.parents:
         raise ValueError(f"path {resolved} escapes root {root}")
     return resolved
