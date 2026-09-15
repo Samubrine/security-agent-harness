@@ -6,7 +6,6 @@ the loop stays testable with fakes and the CLI stays a thin argument parser.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,7 +21,7 @@ from harness.events import EventLog
 from harness.llm.client import build_client
 from harness.memory.index import LongTermIndex
 from harness.memory.manager import MemoryManager
-from harness.models import Budget, ModelMetadata, RunConfig, RunSummary
+from harness.models import Budget, RunConfig, RunSummary
 from harness.parsers.registry import ParserRegistry
 from harness.policy.engine import AutoApproveGate, AutoDenyGate, PolicyEngine, RecordingGate
 from harness.policy.grants import GrantBook
@@ -40,7 +39,7 @@ from harness.runtime.capabilities import with_logical_capabilities
 from harness.runtime.loop import InvestigationLoop
 from harness.runtime.replay import ReplayWriter
 from harness.tokens import BudgetGuard, TokenLedger
-from harness.util import atomic_write_json, iso, new_id, sha256_json, utcnow
+from harness.util import atomic_write_json, new_id, sha256_json, utcnow
 
 
 @dataclass
