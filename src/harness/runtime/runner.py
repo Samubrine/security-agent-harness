@@ -53,6 +53,10 @@ class RunRequest:
     public_key_path: Path | None = None
     root: Path = field(default_factory=lambda: Path.cwd())
     runs_root: Path | None = None
+    #: When set, the run is written exactly here instead of under ``runs_root``. The evaluation
+    #: harness drives the CLI with ``--out`` and scores the directory it named, so the run id and
+    #: the directory name are allowed to differ.
+    run_dir: Path | None = None
     model_backend: str = "scripted"
     model_id: str = "scripted-planner"
     endpoint: str | None = None
@@ -200,7 +204,7 @@ def json_safe(value: Any) -> Any:
 def execute_run(request: RunRequest) -> RunArtifacts:
     root = Path(request.root)
     run_id = request.run_id or f"run-{utcnow().strftime('%Y%m%dT%H%M%S')}-{new_id('', 2)[1:]}"
-    run_dir = request.resolved_runs_root() / run_id
+    run_dir = Path(request.run_dir) if request.run_dir else request.resolved_runs_root() / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     snapshot_path = (

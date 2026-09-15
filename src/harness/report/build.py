@@ -43,6 +43,7 @@ def build_report(*, run_dir: Path) -> tuple[str, dict[str, Any]]:
     findings_raw = read_json(run_dir / "findings.json") if (run_dir / "findings.json").exists() else []
     gaps = read_jsonl(run_dir / "gaps.jsonl")
     decisions = read_jsonl(run_dir / "provider-decisions.jsonl")
+    correlations = read_jsonl(run_dir / "correlations.jsonl")
     ledger = read_jsonl(run_dir / "trace.jsonl")
     executions = read_jsonl(run_dir / "executions.jsonl")
 
@@ -96,6 +97,8 @@ def build_report(*, run_dir: Path) -> tuple[str, dict[str, Any]]:
         "findings": [{"id": v["finding"].id, **v["finding"].model_dump(mode="json"), "evidence": v["evidence"]} for v in findings_view],
         "gaps": gaps,
         "decisions": decisions,
+        "correlations": correlations,
+        "conflicts": [c for c in correlations if c.get("relation") == "conflict"],
         "refusals": refusals,
         "retrieved": [
             {"id": entry_id, "kind": kind}
@@ -122,6 +125,7 @@ def build_report(*, run_dir: Path) -> tuple[str, dict[str, Any]]:
         "findings": findings_raw,
         "gaps": gaps,
         "provider_decisions": decisions,
+        "correlations": correlations,
         "refusals": refusals,
         "integrity": integrity,
         "generated_at": utcnow().isoformat(),

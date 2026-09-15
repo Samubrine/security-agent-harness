@@ -165,3 +165,30 @@ def test_severity_comes_from_a_fixed_rubric() -> None:
     assert severity_for(4.1) == "medium"
     assert severity_for(0.2) == "low"
     assert severity_for(0.0) == "info"
+
+
+def test_a_provider_conflict_is_surfaced_rather_than_hidden(tmp_path) -> None:
+    """Success criterion: the report exposes agreement and conflict instead of choosing a side."""
+    run_dir = _build_run_dir(tmp_path)
+    append_jsonl(
+        run_dir / "correlations.jsonl",
+        {
+            "id": "cor-1",
+            "run_id": "run-report",
+            "key": "service|lab-web-01|22|tcp",
+            "observation_ids": ["o-1", "o-2"],
+            "relation": "conflict",
+            "detail": "providers disagree on version: 8.2p1 vs 9.3p2",
+        },
+    )
+    markdown, machine = build_report(run_dir=run_dir)
+    assert "Cross-provider reconciliation" in markdown
+    assert "conflict" in markdown
+    assert "8.2p1 vs 9.3p2" in markdown
+    assert machine["correlations"][0]["relation"] == "conflict"
+
+
+def test_a_run_with_no_correlations_says_so(tmp_path) -> None:
+    run_dir = _build_run_dir(tmp_path)
+    markdown, _ = build_report(run_dir=run_dir)
+    assert "nothing to reconcile" in markdown

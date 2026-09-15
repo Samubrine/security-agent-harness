@@ -472,14 +472,23 @@ def _finding_id(finding: Mapping[str, Any], fallback: int) -> str:
     return str(finding.get("id") or f"finding#{fallback}")
 
 
-def _match_report(bundle: RunBundle, truth: GroundTruth) -> list[dict[str, Any]]:
+def _match_report(
+    bundle: RunBundle, truth: GroundTruth, *, required_ids: Sequence[str] | None = None
+) -> list[dict[str, Any]]:
     """Per-finding match results: which expectations it satisfies, which controls it violates."""
     index = bundle.observation_index()
+    # A scenario is responsible for a declared subset of the ground truth. Scoring a port scan
+    # against expectations only a log analysis could satisfy would report a recall failure that no
+    # amount of scanning could fix, which is worse than a low number: it is a misleading one.
+    expectations = truth.expectations
+    if required_ids is not None:
+        wanted = {str(item) for item in required_ids}
+        expectations = [exp for exp in truth.expectations if str(exp.get("id")) in wanted]
     report: list[dict[str, Any]] = []
     for position, finding in enumerate(bundle.findings or ()):
         gt_hits = [
             str(exp.get("id"))
-            for exp in truth.expectations
+            for exp in expectations
             if finding_matches(finding, exp.get("match"), observation_index=index)
         ]
         control_hits = [
@@ -504,13 +513,20 @@ def _match_report(bundle: RunBundle, truth: GroundTruth) -> list[dict[str, Any]]
 # ----------------------------------------------------------------------------------------------
 
 
-def finding_precision(bundle: RunBundle, truth: GroundTruth) -> Metric:
+def finding_precision(
+    bundle: RunBundle, truth: GroundTruth, *, required_ids: Sequence[str] | None = None
+) -> Metric:
     """True positives over reported findings.
 
     A finding counts as a true positive when it satisfies at least one expectation *and* violates
     no control. Controls win deliberately: a finding that simultaneously reports a real CVE and
     asserts something the ground truth forbids is the kind of finding a reviewer rejects, and the
     metric should agree with the reviewer.
+
+    ``required_ids`` is accepted and ignored. Precision is a property of what the run *reported*,
+    so it is judged against the whole ground truth even when the scenario only claims a subset of
+    it: a correct CVE finding would otherwise be counted as a false positive in a scenario that
+    happened not to claim CVEs.
     """
     name = "finding_precision"
     if bundle.findings is None:
@@ -533,14 +549,16 @@ def finding_precision(bundle: RunBundle, truth: GroundTruth) -> Metric:
     )
 
 
-def finding_recall(bundle: RunBundle, truth: GroundTruth) -> Metric:
+def finding_recall(
+    bundle: RunBundle, truth: GroundTruth, *, required_ids: Sequence[str] | None = None
+) -> Metric:
     """Expectations covered by at least one reported finding."""
     name = "finding_recall"
     if bundle.findings is None:
         return not_measured(name, "findings.json was not recorded, so there is nothing to score")
     if not truth.expectations:
         return not_measured(name, "ground truth declares no expected findings")
-    rows = _match_report(bundle, truth)
+    rows = _match_report(bundle, truth, required_ids=required_ids)
     covered: set[str] = set()
     covered_by: dict[str, list[str]] = {}
     for row in rows:
@@ -549,7 +567,7 @@ def finding_recall(bundle: RunBundle, truth: GroundTruth) -> Metric:
         for exp_id in row["expectations"]:
             covered.add(exp_id)
             covered_by.setdefault(exp_id, []).append(row["id"])
-    expected_ids = [str(exp.get("id")) for exp in truth.expectations]
+    expected_ids = _scoped_expectation_ids(truth, required_ids)
     missing = [exp_id for exp_id in expected_ids if exp_id not in covered]
     return measured(
         name,
@@ -561,6 +579,15 @@ def finding_recall(bundle: RunBundle, truth: GroundTruth) -> Metric:
             "covered_by": covered_by,
         },
     )
+
+
+def _scoped_expectation_ids(truth: GroundTruth, required_ids: Sequence[str] | None) -> list[str]:
+    """The expectation ids a metric should score against, narrowed to a scenario's own subset."""
+    ids = [str(exp.get("id")) for exp in truth.expectations]
+    if required_ids is None:
+        return ids
+    wanted = {str(item) for item in required_ids}
+    return [exp_id for exp_id in ids if exp_id in wanted]
 
 
 def _claims_supporting(finding: Mapping[str, Any], index: Mapping[str, dict[str, Any]]) -> tuple[list[str], list[str]]:
@@ -1149,14 +1176,29 @@ assert tuple(_METRIC_FUNCTIONS) == METRIC_NAMES, "METRIC_NAMES and the dispatch 
 
 
 def compute_metrics(
-    bundle: RunBundle, truth: GroundTruth, names: Sequence[str] | None = None
+    bundle: RunBundle,
+    truth: GroundTruth,
+    names: Sequence[str] | None = None,
+    *,
+    required_ids: Sequence[str] | None = None,
 ) -> list[Metric]:
-    """Compute the named metrics (all of them by default) for one run bundle."""
+    """Compute the named metrics (all of them by default) for one run bundle.
+
+    ``required_ids`` narrows the precision and recall scoring to the ground-truth expectations the
+    calling scenario is responsible for. Without it a port-scan scenario is marked down for not
+    reporting the findings that only a log analysis could produce.
+    """
     selected = tuple(names) if names is not None else METRIC_NAMES
     unknown = [name for name in selected if name not in _METRIC_FUNCTIONS]
     if unknown:
         raise KeyError(f"unknown metric(s): {', '.join(unknown)}; known metrics: {', '.join(METRIC_NAMES)}")
-    return [_METRIC_FUNCTIONS[name](bundle, truth) for name in selected]
+    scoped = {"finding_recall"}
+    return [
+        _METRIC_FUNCTIONS[name](bundle, truth, required_ids=required_ids)
+        if required_ids is not None and name in scoped
+        else _METRIC_FUNCTIONS[name](bundle, truth)
+        for name in selected
+    ]
 
 
 def evaluate_run_dir(

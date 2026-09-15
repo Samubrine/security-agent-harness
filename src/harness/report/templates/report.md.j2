@@ -99,6 +99,29 @@ reported as safety.
 Nothing was refused in this run.
 {% endif %}
 
+## Cross-provider reconciliation
+
+When more than one provider reports on the same subject, the harness compares normalised values rather
+than prose. Agreement is corroboration, a complement is two providers filling different fields, and a
+conflict is preserved rather than resolved by preference.
+
+{% if correlations %}
+| Subject | Relation | Observations | Detail |
+|---|---|---|---|
+{% for correlation in correlations %}
+| `{{ correlation.key }}` | {{ correlation.relation }} | {{ correlation.observation_ids | join(', ') }} | {{ correlation.detail }} |
+{% endfor %}
+{% else %}
+No subject in this run was reported by more than one provider, so there is nothing to reconcile. A
+capability satisfied by a single provider by design produces no row here.
+{% endif %}
+
+{% if conflicts %}
+**Conflicts are present in this run.** They are reported above and recorded in `correlations.jsonl`
+rather than hidden by choosing the more convenient answer. A conflict is a reason to spend a bounded
+second provider call on resolution, not a licence to pick a side.
+{% endif %}
+
 ## Memory
 
 - baseline `sha256:{{ run.memory.baseline_sha256[:16] }}`, active `sha256:{{ run.memory.active_sha256[:16] }}`

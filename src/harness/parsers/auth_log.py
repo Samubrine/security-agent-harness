@@ -59,6 +59,10 @@ class _Event:
     outcome: str
     byte_start: int
     byte_end: int
+    #: The host the log line itself names. A filesystem grant authorises a *corpus*, and the corpus
+    #: is about a host; attributing an authentication event to the directory it was read from would
+    #: make the finding unfalsifiable in the one way that matters -- a reader cannot check it.
+    host: str
 
 
 def parse_auth_log(
@@ -83,7 +87,9 @@ def parse_auth_log(
         evidence_of=evidence_of,
         target=target,
     )
-    host = target or "unknown"
+    # The corpus alias is the fallback for a line that does not name a host, never the default: an
+    # auth event is evidence about a host, and the log says which one.
+    corpus = target or "unknown"
     events = _extract_events(ctx.data)
     observations: list[Observation] = []
     for event in events:
@@ -91,7 +97,7 @@ def parse_auth_log(
             ctx.observe(
                 "auth_event",
                 {
-                    "target": host,
+                    "target": event.host or corpus,
                     "event": event.event,
                     "src_ip": event.src_ip,
                     "user": event.user,
@@ -114,7 +120,7 @@ def parse_auth_log(
                 id=new_id("g"),
                 run_id=run_id,
                 kind="empty_result",
-                scope={"target": host, "parser": PARSER_NAME},
+                    scope={"target": corpus, "parser": PARSER_NAME},
                 impact="the authentication log contained no recognisable sshd events",
                 capability=execution.capability,
             )
@@ -126,7 +132,7 @@ def parse_auth_log(
     observations.append(
         ctx.observe(
             "auth_summary",
-            _summarise(events, host),
+            _summarise(events, _primary_host(events, corpus)),
             byte_start=summary_start,
             byte_end=summary_end,
             taint="T2",
@@ -137,14 +143,14 @@ def parse_auth_log(
 
     # An instruction shipped inside a username or a service field is still attacker-authored text,
     # so it is screened here too rather than only in the parsers that read obviously hostile prose.
-    unauthorised = out_of_scope_ips(ctx.data.decode("utf-8", errors="replace"), {host})
+    unauthorised = out_of_scope_ips(ctx.data.decode("utf-8", errors="replace"), {corpus})
     if unauthorised and any("ignore" in e.user.lower() for e in events):
         gaps.append(
             EvidenceGap(
                 id=new_id("g"),
                 run_id=run_id,
                 kind="prompt_injection_attempt",
-                scope={"target": host, "out_of_scope_ips": unauthorised},
+                scope={"target": corpus, "out_of_scope_ips": unauthorised},
                 impact=(
                     "authentication log content contains instruction-shaped text naming "
                     f"{', '.join(unauthorised)}; it is recorded, not acted on"
@@ -169,7 +175,16 @@ def _extract_events(data: bytes) -> list[_Event]:
         failed = _FAILED.search(message)
         if failed:
             out.append(
-                _Event(stamp, failed.group("ip"), failed.group("user"), "failed_password", "failure", start, end)
+                _Event(
+                    stamp,
+                    failed.group("ip"),
+                    failed.group("user"),
+                    "failed_password",
+                    "failure",
+                    start,
+                    end,
+                    match.group("host"),
+                )
             )
             continue
         accepted = _ACCEPTED.search(message)
@@ -183,6 +198,7 @@ def _extract_events(data: bytes) -> list[_Event]:
                     "success",
                     start,
                     end,
+                    match.group("host"),
                 )
             )
     return out
@@ -216,6 +232,17 @@ def _summarise(events: list[_Event], host: str) -> dict[str, Any]:
                     for s in successes)
         ),
     }
+
+
+def _primary_host(events: list[_Event], fallback: str) -> str:
+    """The host most of these events are about, so a rollup names a subject rather than a file."""
+    counts: dict[str, int] = {}
+    for event in events:
+        if event.host:
+            counts[event.host] = counts.get(event.host, 0) + 1
+    if not counts:
+        return fallback
+    return max(sorted(counts), key=lambda name: counts[name])
 
 
 def _timestamp(match: re.Match[str]) -> datetime | None:

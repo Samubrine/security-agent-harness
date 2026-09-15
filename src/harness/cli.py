@@ -53,6 +53,7 @@ def run(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Render intentions without executing.")] = False,
     allow_remote: Annotated[bool, typer.Option("--allow-remote-egress", help="Permit a non-loopback model endpoint.")] = False,
     run_id: Annotated[str | None, typer.Option("--run-id", help="Override the generated run id.")] = None,
+    out: Annotated[Path | None, typer.Option("--out", help="Write the run directory exactly here instead of under runs/.")] = None,
     snapshot: Annotated[Path | None, typer.Option("--vuln-snapshot", help="Offline vulnerability snapshot.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print the run summary as JSON.")] = False,
 ) -> None:
@@ -71,6 +72,7 @@ def run(
         dry_run=dry_run,
         allow_remote=allow_remote,
         run_id=run_id,
+        run_dir=out,
         snapshot_path=snapshot,
     )
     try:

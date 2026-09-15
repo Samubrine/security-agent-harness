@@ -230,13 +230,14 @@ def build_command(
     repo_root: Path,
     run_dir: Path,
     ground_truth_path: Path,
+    scope_override: Path | None = None,
 ) -> list[str]:
     """The full argv for one scenario: entry point tokens followed by the scenario arguments."""
     context = {
         "scenario_id": scenario.scenario_id,
         "skill": scenario.skill,
         "objective": scenario.objective,
-        "scope_path": str((Path(repo_root) / scenario.scope_path).resolve()),
+        "scope_path": str(_resolve_scope(repo_root, scenario, scope_override)),
         "run_id": scenario.run_id,
         "run_dir": str(Path(run_dir)),
         "aliases": ",".join(scenario.aliases),
@@ -254,6 +255,19 @@ def _subprocess_env(repo_root: Path) -> dict[str, str]:
     env["PYTHONPATH"] = f"{src}{os.pathsep}{existing}" if existing else src
     env["PYTHONUNBUFFERED"] = "1"
     return env
+
+
+def _resolve_scope(repo_root: Path, scenario: Scenario, override: Path | None) -> Path:
+    """The scope record a scenario should run under.
+
+    A signed record is required, and the signing key deliberately lives outside the repository, so
+    the scenarios stay declarative and the runner takes the signed path as an argument. Without an
+    override the scenario's own path is used, which is what makes a scenario file readable on its
+    own and what makes a missing record fail with a path rather than a mystery.
+    """
+    if override is not None:
+        return Path(override).expanduser().resolve()
+    return (Path(repo_root) / scenario.scope_path).resolve()
 
 
 # ----------------------------------------------------------------------------------------------
@@ -300,12 +314,18 @@ def run_scenario(
     truth: GroundTruth,
     timeout_s: float,
     dry_run: bool,
+    scope_override: Path | None = None,
 ) -> ScenarioResult:
     """Run one scenario and score whatever it recorded."""
     scenario_dir = Path(results_dir) / scenario.scenario_id
     run_dir = scenario_dir / "run"
     command = build_command(
-        scenario, entrypoint=entrypoint, repo_root=repo_root, run_dir=run_dir, ground_truth_path=ground_truth_path
+        scenario,
+        entrypoint=entrypoint,
+        repo_root=repo_root,
+        run_dir=run_dir,
+        ground_truth_path=ground_truth_path,
+        scope_override=scope_override,
     )
     result = ScenarioResult(
         scenario_id=scenario.scenario_id,
@@ -316,6 +336,17 @@ def run_scenario(
         status="dry_run" if dry_run else "unknown",
     )
     if dry_run:
+        return result
+
+    # Checked before spawning: a missing scope record produces a one-line, actionable failure
+    # instead of a CLI error log that a reader has to interpret.
+    resolved_scope = _resolve_scope(repo_root, scenario, scope_override)
+    if not resolved_scope.exists():
+        result.status = "failed"
+        result.error = (
+            f"no scope record at {resolved_scope}; run 'make scope' to generate and sign one, "
+            "or pass --scope with its location"
+        )
         return result
 
     scenario_dir.mkdir(parents=True, exist_ok=True)
@@ -354,7 +385,12 @@ def run_scenario(
         return result
 
     bundle = load_run_bundle(run_dir)
-    result.metrics = compute_metrics(bundle, truth, scenario.metrics)
+    result.metrics = compute_metrics(
+        bundle,
+        truth,
+        scenario.metrics,
+        required_ids=scenario.expected_outcome.get("ground_truth_required") or None,
+    )
     result.status = "completed" if completed.returncode == 0 else "failed"
     if completed.returncode != 0:
         result.error = f"the CLI exited {completed.returncode}; metrics were computed from the partial run"
@@ -433,6 +469,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--results-dir", type=Path, default=None, help="where run directories and metrics are written")
     parser.add_argument("--ground-truth", type=Path, default=None, help="ground-truth JSON (default: eval/ground_truth.json)")
     parser.add_argument(
+        "--scope",
+        type=Path,
+        default=None,
+        help=(
+            "signed scope record to run every scenario under. The signing key lives outside the "
+            "repository, so the signed record has to be supplied; 'make scope' writes one."
+        ),
+    )
+    parser.add_argument(
         "--entrypoint",
         nargs="+",
         default=None,
@@ -501,6 +546,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             truth=truth,
             timeout_s=args.timeout,
             dry_run=args.dry_run,
+            scope_override=args.scope,
         )
         results.append(result)
         print(f"[{result.status}] {scenario.scenario_id}")

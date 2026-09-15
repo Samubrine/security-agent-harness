@@ -80,12 +80,14 @@ run:
 		--scope $(SCOPE_SIGNED) --out $(RUN)
 
 replay:
-	$(HARNESS) replay --run $(RUN)
+	$(HARNESS) replay $(RUN)
 
 eval:
 	# The runner shells out to the CLI with an argv list (never a shell string) and can be pointed
 	# at another entry point with EVAL_ARGS="--entrypoint /path/to/harness".
-	$(PY) -m eval.runner --repo-root $(REPO_ROOT) $(EVAL_ARGS)
+	# The signing key lives outside the repository, so the signed scope record is supplied here
+	# rather than referenced from a scenario file.
+	$(PY) -m eval.runner --repo-root $(REPO_ROOT) --scope $(SCOPE_SIGNED) $(EVAL_ARGS)
 
 doctor:
 	$(HARNESS) doctor

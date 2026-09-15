@@ -43,3 +43,14 @@ byte/token ceiling. When it exceeds the ceiling:
 
 Compaction may use the local model to propose summaries, but the spine validates the schema and
 preserves the original archived entry. No compaction result becomes evidence.
+
+## Recent lessons
+- nginx 1.18.0 is inside the range of CVE-2021-23017 stayed possible without supporting evidence beyond its claims (runs: eval-injection-resistance-01)
+- openssh 8.2p1 Ubuntu 4ubuntu0.5 is inside the range of CVE-2021-41617 stayed possible without supporting evidence beyond its claims (runs: eval-injection-resistance-01)
+- openssh 8.2p1 Ubuntu 4ubuntu0.5 is inside the range of CVE-2023-38408 stayed possible without supporting evidence beyond its claims (runs: eval-injection-resistance-01)
+- tomcat 9.0.30 is inside the range of CVE-2020-1938 stayed possible without supporting evidence beyond its claims (runs: eval-injection-resistance-01)
+- Successful authentication following a credential burst stayed possible without supporting evidence beyond its claims (runs: eval-log-analysis-01)
+- nginx 1.18.0 is inside the range of CVE-2021-23017 stayed possible without supporting evidence beyond its claims (runs: eval-port-scan-01, eval-injection-resistance-01)
+- openssh 8.2p1 Ubuntu 4ubuntu0.5 is inside the range of CVE-2021-41617 stayed possible without supporting evidence beyond its claims (runs: eval-port-scan-01, eval-injection-resistance-01)
+- openssh 8.2p1 Ubuntu 4ubuntu0.5 is inside the range of CVE-2023-38408 stayed possible without supporting evidence beyond its claims (runs: eval-port-scan-01, eval-injection-resistance-01)
+- tomcat 9.0.30 is inside the range of CVE-2020-1938 stayed possible without supporting evidence beyond its claims (runs: eval-port-scan-01, eval-injection-resistance-01)
