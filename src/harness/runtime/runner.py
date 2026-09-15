@@ -24,6 +24,7 @@ from harness.memory.manager import MemoryManager
 from harness.models import Budget, RunConfig, RunSummary
 from harness.parsers.registry import ParserRegistry
 from harness.policy.engine import AutoApproveGate, AutoDenyGate, PolicyEngine, RecordingGate
+from harness.policy.egress import assess_provider_egress, require_permitted
 from harness.policy.grants import GrantBook
 from harness.policy.taint import TaintTracker
 from harness.providers.necessity import NecessityGate
@@ -185,6 +186,13 @@ def _persist(
         [d.model_dump(mode="json") for d in policy.decisions()] if policy is not None else []
     )
     _write_jsonl(run_dir / "policy-decisions.jsonl", policy_decisions)
+    # Conflicts that scheduled their own resolving call. Recorded separately from the decisions
+    # they produced, because the interesting fact is that the harness acted on a disagreement it
+    # detected itself rather than only on what the planner asked for.
+    _write_jsonl(
+        run_dir / "follow-ups.jsonl",
+        [f.model_dump(mode="json") for f in getattr(state, "follow_ups", [])],
+    )
     # Provider-call telemetry (design 08 section 9). Written in the shape the evaluation harness
     # reads, so provider efficiency and necessity precision are measured rather than asserted.
     telemetry = [getattr(item, "model_dump", lambda **_: item)(mode="json") for item in getattr(state, "telemetry", [])]
@@ -303,6 +311,37 @@ def execute_run(request: RunRequest) -> RunArtifacts:
         request, snapshot, observations=lambda: list(loop_state.get("observations", [])), run_id=run_id
     )
 
+    # Provider-side egress, before the loop can use any of them (audit invariant 12). The gate's
+    # objection was that ProviderSpec.requires_network_egress is declared by the provider and then
+    # trusted, so a remote provider registering itself as local would be treated as a local
+    # source. Assessment therefore keys off the transport the harness chose - a fact the harness
+    # owns - and the declaration is only ever echoed for comparison. Fail closed: a provider that
+    # is not permitted stops the run here rather than being quietly skipped, because a run that
+    # silently lost a capability would report an incomplete investigation as a complete one.
+    egress_assessments = [
+        assess_provider_egress(
+            spec.id,
+            endpoint=spec.endpoint,
+            declared_requires_egress=spec.requires_network_egress,
+            egress_enabled=config.enable_remote_egress,
+            local_subprocess=spec.transport == "local_subprocess",
+        )
+        for spec in registry.specs()
+    ]
+    for assessment in egress_assessments:
+        events.append(
+            "EGRESS_ASSESSED",
+            {
+                "provider": assessment.provider,
+                "endpoint_class": assessment.endpoint_class,
+                "permitted": assessment.permitted,
+                "declared_by_provider": assessment.declared_by_provider,
+                "declaration_mismatch": assessment.declaration_mismatch,
+                "reasons": assessment.reasons,
+            },
+        )
+        require_permitted(assessment)
+
     rules = RuleEngine()
     correlator = Correlator(run_id)
     policy = PolicyEngine(resolved.grants, dry_run=request.dry_run)
@@ -352,6 +391,21 @@ def execute_run(request: RunRequest) -> RunArtifacts:
     from harness.util import atomic_write_json as _write_json
 
     _write_json(run_dir / "scope.json", resolved.scope.model_dump(mode="json"))
+    # The egress assessment is part of the run's authority record: it is the evidence that each
+    # provider was judged on how the harness reached it rather than on what it claimed.
+    _write_json(
+        run_dir / "egress.json",
+        [
+            {
+                **assessment.model_dump(mode="json"),
+                # A derived property, so model_dump does not carry it. It is the single most
+                # useful field for an auditor: it says a provider's claim about itself disagreed
+                # with how the harness actually reached it.
+                "declaration_mismatch": assessment.declaration_mismatch,
+            }
+            for assessment in egress_assessments
+        ],
+    )
 
     from harness.report.build import write_report
 

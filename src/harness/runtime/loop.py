@@ -32,6 +32,7 @@ from harness.models import (
     ApprovalRequest,
     CapabilityProposal,
     EvidenceGap,
+    FollowUpNeed,
     Observation,
     ProviderCallTelemetry,
     ProviderDecision,
@@ -41,6 +42,7 @@ from harness.models import (
 )
 from harness.providers.base import ProviderRequest, ProviderResult
 from harness.providers.necessity import CAPABILITY_OUTPUT_KINDS, cache_key
+from harness.runtime.replan import follow_up_needs
 from harness.runtime.fsm import RunState, State
 from harness.util import canonical_json, iso, new_id, utcnow
 
@@ -154,6 +156,10 @@ class InvestigationLoop:
         self._seen_observation_keys: set[str] = set()
         self._last_gap_count = 0
         self._last_finding_ids: set[str] = set()
+        #: Capabilities a conflict already scheduled a resolving call for. Without this the loop
+        #: would detect the same unresolved conflict on the next pass and ask for the same
+        #: expansion forever; one resolving call per capability is the ceiling.
+        self._follow_ups_attempted: set[str] = set()
 
     # -- public entry point ----------------------------------------------------------------
 
@@ -191,6 +197,17 @@ class InvestigationLoop:
                     "no capability in this skill has both a registered provider and a grant"
                 )
                 break
+
+            # A conflict schedules its own resolving call, before the model is asked. The need is
+            # already computable from run state, so asking the model to re-derive it would spend a
+            # model turn on a question the harness has already answered. Design 08 says a conflict
+            # may create a new evidence need; before v1.1 nothing turned that "may" into a call.
+            need = self._scheduled_follow_up(catalogue)
+            if need is not None:
+                self._pursue_follow_up(need, catalogue)
+                self._derive()
+                self._goto(State.PLANNING)
+                continue
 
             bundle = self.builder.build(
                 resolved=self.context,
@@ -395,6 +412,66 @@ class InvestigationLoop:
                 any_executed = True
         self._goto(State.FINDINGS)
         return any_executed or True
+
+    # -- scheduled re-planning on conflict --------------------------------------------------
+
+    def _scheduled_follow_up(self, catalogue: Mapping[str, Any]) -> FollowUpNeed | None:
+        """A resolving provider call that an unresolved conflict justifies.
+
+        The capability is filtered against the catalogue, which is the same structural guarantee
+        the model's proposals get: a scheduled call can only ever be for something that is both
+        registered and authorised. A conflict about a capability no grant can serve therefore
+        produces no call rather than an unauthorised one.
+        """
+        needs = follow_up_needs(
+            run_id=self.config.run_id,
+            conflicts=self.state.correlations,
+            observations=self.state.observations,
+            decisions=self.state.decisions,
+            already_attempted=self._follow_ups_attempted,
+            max_needs=1,
+        )
+        offered = {entry["capability"] for entry in catalogue["capabilities"]}
+        for need in needs:
+            if need.capability in offered:
+                return need
+        return None
+
+    def _pursue_follow_up(self, need: FollowUpNeed, catalogue: Mapping[str, Any]) -> bool:
+        """Pursue a scheduled need through the ordinary validate/necessity/policy path.
+
+        Deliberately not a shortcut around the gate. The need says *what* is wanted and *why*; the
+        gate still decides whether a second provider is warranted and which one, so the expansion
+        is recorded with expansion_reason=conflict_resolution like any other multi-provider call.
+        Routing it any other way would make conflicts the one code path that can spend budget
+        without a necessity decision behind it.
+        """
+        self._follow_ups_attempted.add(need.capability)
+        self.state.follow_ups.append(need)
+        self.events.append(
+            "FOLLOW_UP_SCHEDULED",
+            {
+                "capability": need.capability,
+                "reason": need.reason,
+                "correlation": need.correlation_id,
+                "observations": need.observation_ids,
+                "detail": need.detail,
+            },
+        )
+        entry = next(
+            entry for entry in catalogue["capabilities"] if entry["capability"] == need.capability
+        )
+        grant = entry["grants"][0]
+        proposal = CapabilityProposal(
+            grant=grant["grant"],
+            capability=need.capability,
+            args=dict(grant["args"]),
+            expects=need.expects,
+            evidence_needed=need.detail,
+        )
+        if not self._validate(proposal, catalogue):
+            return False
+        return self._pursue(proposal, catalogue)
 
     def _run_provider(
         self, provider_id: str, proposal: CapabilityProposal, decision: ProviderDecision

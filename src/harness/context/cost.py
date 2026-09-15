@@ -37,10 +37,10 @@ def attribute_prompt_cost(
 
     `tiers` is a tier-name to estimated-token-count mapping, as produced by
     `harness.context.builder.PromptBundle`. `tier_caps` is the ceiling each tier was supposed
-    to respect. A tier absent from `tier_caps` is never reported as over cap: an
-    absent cap is not a zero cap, and inventing one would manufacture an overrun for every
-    tier the caller did not mention. A zero cap over a zero-token tier is likewise not an
-    overrun, since nothing was discarded.
+    to respect. A tier absent from `tier_caps` is never reported as over cap: an absent cap is
+    not a zero cap, and inventing one would manufacture an overrun for every tier the caller
+    did not mention. A zero cap over a zero-token tier is likewise not an overrun, since
+    nothing was discarded.
 
     `dropped_tokens` is the sum of the individual overages -- what the caps actually threw
     away, not how large the offending tiers are. `over_cap_tiers` is sorted so two runs with
@@ -51,7 +51,10 @@ def attribute_prompt_cost(
     the harness sent -- the one number a cost report exists to get right.
     """
     validated_tiers = {name: _non_negative(value, "tier " + repr(name)) for name, value in tiers.items()}
-    caps = {name: _non_negative(value, "cap for tier " + repr(name)) for name, value in (tier_caps or {}).items()}
+    caps = {
+        name: _non_negative(value, "cap for tier " + repr(name))
+        for name, value in (tier_caps or {}).items()
+    }
 
     ordered = dict(sorted(validated_tiers.items()))
     over_cap = sorted(

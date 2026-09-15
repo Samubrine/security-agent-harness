@@ -346,6 +346,8 @@ class _RecordFile(NamedTuple):
     needs: tuple[str, ...]
     canonical: str
     fallback: str | None = None
+    #: False for a file a clean run is allowed not to write at all.
+    required: bool = True
 
 
 _RECORD_FILES: tuple[_RecordFile, ...] = (
@@ -364,7 +366,10 @@ _RECORD_FILES: tuple[_RecordFile, ...] = (
     ),
     _RecordFile("observations", Observation, ("id", "run_id"), "observations.json", "observations.jsonl"),
     _RecordFile("findings", Finding, ("id", "run_id", "claims"), "findings.json"),
-    _RecordFile("gaps", EvidenceGap, ("id",), "gaps.jsonl"),
+    # ``gaps.jsonl`` is optional on purpose: a run that recorded no gap writes no file, which is
+    # what ``eval/results/log_analysis/run`` looks like. Calling that run incomplete would be a
+    # false accusation, and a false accusation is how an audit gets ignored.
+    _RecordFile("gaps", EvidenceGap, ("id",), "gaps.jsonl", required=False),
 )
 
 
@@ -515,7 +520,7 @@ def _policy_ids_from_events(run_dir: Path, issues: list[ProvenanceIssue]) -> set
         return set()
     found: set[str] = set()
     for event in _read_raw_records(path, issues):
-        if not isinstance(event, dict) or event.get("event_type") != "POLICY_DECIDED":
+        if not isinstance(event, dict) or event.get("type") != "POLICY_DECIDED":
             continue
         data = event.get("data")
         if isinstance(data, dict) and isinstance(data.get("policy_decision_id"), str):
@@ -575,14 +580,15 @@ def audit_run_dir(run_dir: Path) -> ProvenanceAudit:
         path = _locate(run_dir, spec)
         if path is None:
             loaded[spec.kind] = []
-            issues.append(
-                _issue(
-                    "run_dir_incomplete",
-                    spec.canonical,
-                    f"{spec.canonical} is absent"
-                    + (f" and so is {spec.fallback}" if spec.fallback else ""),
+            if spec.required:
+                issues.append(
+                    _issue(
+                        "run_dir_incomplete",
+                        spec.canonical,
+                        f"{spec.canonical} is absent"
+                        + (f" and so is {spec.fallback}" if spec.fallback else ""),
+                    )
                 )
-            )
             continue
         loaded[spec.kind] = _load_records(path, spec, issues)
 

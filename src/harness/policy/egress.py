@@ -198,7 +198,12 @@ def assess_provider_egress(
         reasons.append(REASON_ENDPOINT_LOCAL)
     if local_subprocess:
         reasons.append(REASON_LOCAL_EXECUTION)
-        if derived in ("public", "unknown"):
+        # Only a genuinely supplied endpoint can contradict local execution. ``classify_endpoint``
+        # reports ``unknown`` for ``None``, so without the ``is not None`` guard every local tool
+        # with no endpoint at all would be flagged as if it had a remote one - noise that would
+        # bury the real contradiction. ("public" in the reason name means "not local"; an
+        # explicitly supplied endpoint the harness cannot classify is not local either.)
+        if endpoint is not None and derived != "loopback":
             reasons.append(REASON_LOCAL_EXECUTION_PUBLIC_ENDPOINT)
     if egress_enabled:
         reasons.append(REASON_EGRESS_ENABLED)

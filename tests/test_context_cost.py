@@ -218,9 +218,12 @@ def test_memory_cost_accepts_any_sequence_and_a_tuple_is_not_mistaken_for_one_hi
 
 
 def test_memory_report_serialises_with_the_fields_the_optimizer_reads() -> None:
-    report = memory_retrieval_cost(baseline_text=_text(400), active_text=_text(40), retrieved=[_hit("mem-s", _text(40))])
+    report = memory_retrieval_cost(
+        baseline_text=_text(400), active_text=_text(40), retrieved=[_hit("mem-s", _text(40))]
+    )
     payload = canonical_json(report)
-    for field in ("baseline_tokens", "active_tokens", "retrieved_tokens", "retrieved_entries", "total_tokens"):
+    fields = ("baseline_tokens", "active_tokens", "retrieved_tokens", "retrieved_entries", "total_tokens")
+    for field in fields:
         assert field in payload
 
 
@@ -257,10 +260,7 @@ def test_cap_discard_flows_from_tiers_through_to_the_reported_saving() -> None:
     clamped = raw[:400]
     saved = compression_savings(raw_text=raw, clamped_text=clamped)
     report = attribute_prompt_cost(
-        tiers={"C4": estimate_tokens(clamped)},
-        tier_caps={"C4": 50},
-        run_id="run-e2e",
-        step=3,
+        tiers={"C4": estimate_tokens(clamped)}, tier_caps={"C4": 50}, run_id="run-e2e", step=3
     )
     assert report.over_cap_tiers == ["C4"]
     assert report.dropped_tokens == estimate_tokens(clamped) - 50

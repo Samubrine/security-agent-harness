@@ -15,6 +15,7 @@ from harness.models import (
     Claim,
     Correlation,
     EvidenceGap,
+    FollowUpNeed,
     Finding,
     Observation,
     ProviderCallTelemetry,
@@ -55,7 +56,11 @@ TRANSITIONS: dict[State, set[State]] = {
     State.EXECUTING: {State.PARSING, State.FINDINGS, State.PLANNING} | TERMINAL,
     State.PARSING: {State.CORRELATING, State.FINDINGS} | TERMINAL,
     State.CORRELATING: {State.FINDINGS} | TERMINAL,
-    State.FINDINGS: {State.PLANNING} | TERMINAL,
+    # FINDINGS -> POLICY is legal because one necessity decision can select more than one provider
+    # (conflict_resolution, trust_diversity). `_run_provider` leaves the machine here, and `_pursue`
+    # then gates the next execution of the *same* decision - which is a policy step, not a new
+    # planning cycle: necessity has already been decided and must not be re-derived per provider.
+    State.FINDINGS: {State.PLANNING, State.POLICY} | TERMINAL,
     State.TERMINATING: {State.DONE, State.FAILED},
     State.DONE: set(),
     State.FAILED: set(),
@@ -84,6 +89,9 @@ class RunState:
     #: Per-provider-call telemetry, recorded so the v2 Token Optimizer can be evaluated against
     #: measured traces instead of an architectural guess (design 08 section 9).
     telemetry: list[ProviderCallTelemetry] = field(default_factory=list)
+    #: Evidence needs a conflict created on its own, without a model turn. Kept so the report can
+    #: show that a second call was driven by a detected disagreement rather than by the planner.
+    follow_ups: list[FollowUpNeed] = field(default_factory=list)
 
     def transition(self, new_state: State) -> None:
         if new_state is self.state:

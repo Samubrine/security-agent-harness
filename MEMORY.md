@@ -55,4 +55,4 @@ preserves the original archived entry. No compaction result becomes evidence.
 - openssh 8.2p1 Ubuntu 4ubuntu0.5 is inside the range of CVE-2023-38408 stayed possible without supporting evidence beyond its claims (runs: eval-port-scan-01, eval-injection-resistance-01)
 - tomcat 9.0.30 is inside the range of CVE-2020-1938 stayed possible without supporting evidence beyond its claims (runs: eval-port-scan-01, eval-injection-resistance-01)
 - nginx 1.18.0 is inside the range of CVE-2021-23017 stayed possible without supporting evidence beyond its claims (runs: doc-check, 
-[...0000004923 bytes compacted out of the active set; see the archived snapshot ...]
+[...0000005001 bytes compacted out of the active set; see the archived snapshot ...]

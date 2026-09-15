@@ -731,6 +731,17 @@ class EgressAssessment(_Base):
 
     @property
     def declaration_mismatch(self) -> bool:
+        """Did the provider's own claim disagree with how the harness reached it?
+
+        Only meaningful when the endpoint was classified as something other than loopback. For a
+        loopback endpoint the flag describes whether the *tool* reaches out to a target - nmap
+        declares True while running as a plain local process, because it sends packets at a host
+        rather than calling a remote service. That is a scope question the grant and the policy
+        engine already bound, not a claim about transport, and comparing it here would flag every
+        locally executed provider and train an operator to ignore the field.
+        """
+        if self.endpoint_class == "loopback":
+            return False
         return self.declared_by_provider != self.egress_actually_required
 
 

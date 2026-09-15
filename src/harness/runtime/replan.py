@@ -33,14 +33,21 @@ from harness.util import canonical_json, clamp_text, new_id
 #: and re-asking would be the necessity gate's own failure mode committed by the planner.
 RESOLVING_RELATION = "conflict"
 
+def _invert(table: Mapping[str, set[str]]) -> dict[str, str]:
+    """kind -> capability, built in sorted order so the result never depends on dict ordering.
+
+    First-wins on a collision keeps this a pure function of the gate's table even if some future
+    edit makes it ambiguous. The suite asserts the table is unambiguous, so this is a guard.
+    """
+    inverted: dict[str, str] = {}
+    for capability in sorted(table):
+        for kind in sorted(table[capability]):
+            inverted.setdefault(kind, capability)
+    return inverted
+
+
 #: The capability that serves each observation kind, derived from the gate so the two cannot drift.
-#: Ties are impossible in the shipped table; if one is ever introduced the capability chosen is the
-#: lexicographically first, which keeps the mapping a pure function of the gate's table.
-CAPABILITY_FOR_KIND: dict[str, str] = {
-    kind: capability
-    for capability in sorted(CAPABILITY_OUTPUT_KINDS)
-    for kind in sorted(CAPABILITY_OUTPUT_KINDS[capability])
-}
+CAPABILITY_FOR_KIND: dict[str, str] = _invert(CAPABILITY_OUTPUT_KINDS)
 
 
 def _expects_for(capability: str) -> str:
@@ -146,9 +153,10 @@ def follow_up_needs(
     attempted = set(already_attempted)
     expanded = _already_expanded(decisions)
 
-    # capability -> (correlation_id, ...) for the winning correlation. Keeping the lowest
-    # correlation id per capability is arbitrary but deterministic, and it is what collapses two
-    # conflicts about one capability into a single need instead of two.
+    # capability -> the winning correlation. Keeping the lowest correlation id per capability is
+    # arbitrary but deterministic, and it is what collapses two conflicts about one capability into
+    # a single need instead of two. Sorting the input also makes the outcome independent of the
+    # caller's ordering.
     winners: dict[str, Correlation] = {}
     for correlation in sorted(conflicts, key=lambda c: (c.id,)):
         if correlation.relation != RESOLVING_RELATION:
