@@ -625,6 +625,13 @@ class InvestigationLoop:
         observations = list(self.state.observations.values())
         claims = list(self.rules.evaluate(observations))
         self.state.claims = claims
+        # A rule whose template disagrees with the observation it matched is skipped rather than
+        # crashing the run, but it is never silent: an analyser that quietly stops firing looks
+        # exactly like an environment with nothing to report.
+        for rule_id, problem in getattr(self.rules, "skipped", []):
+            self.events.append(
+                "ANALYSER_RULE_SKIPPED", {"rule": rule_id, "reason": problem}
+            )
         for claim in claims:
             self.events.append(
                 "CLAIM_ADDED",

@@ -146,7 +146,7 @@ DEFAULT_RULES: tuple[dict[str, Any], ...] = (
         "statement": (
             "Scan and log evidence from this run support an entry-point hypothesis: a reachable "
             "exposed service ({scan_count} service observations) coincides with hostile activity "
-            "in the logs ({log_count} log rollups). The hypothesis rests on two independent "
+            "in the logs ({logs_count} log rollups). The hypothesis rests on two independent "
             "sources, which is why it is reported separately from either one."
         ),
         "assertion": "rule_derived",
