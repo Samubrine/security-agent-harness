@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence
 
 from harness.analysers.cve_match import CveCandidate, VulnerabilitySnapshot
+from harness.context.cost import attribute_prompt_cost, memory_retrieval_cost
 from harness.errors import (
     ApprovalRejected,
     BudgetExhausted,
@@ -245,6 +246,34 @@ class InvestigationLoop:
             tiers=bundle.tiers,
             memory_tokens=bundle.tiers.get("C1", 0) + bundle.tiers.get("C3", 0),
             evidence_tokens=bundle.tiers.get("C4", 0),
+        )
+        # What this prompt cost per tier, what a tier cap discarded, and what memory retrieval
+        # cost. Recorded on the event trail rather than computed on demand because design 08's v2
+        # Token Optimizer is meant to learn from measured traces, and a trace that was never
+        # collected cannot be revisited later. dropped_tokens is the compression figure: it is the
+        # cost of the tier caps rather than a saving, since a cap removes evidence the model would
+        # otherwise have seen.
+        cost = attribute_prompt_cost(
+            tiers=bundle.tiers,
+            tier_caps=self.builder.tier_caps,
+            run_id=self.config.run_id,
+            step=self.state.step,
+        )
+        memory_cost = memory_retrieval_cost(
+            baseline_text=self.context.baseline_text,
+            active_text=self.context.active_text,
+            retrieved=self.context.retrieved,
+        )
+        self.events.append(
+            "CONTEXT_ASSEMBLED",
+            {
+                "step": self.state.step,
+                "tiers": cost.tiers,
+                "total_tokens": cost.total_tokens,
+                "dropped_tokens": cost.dropped_tokens,
+                "over_cap_tiers": cost.over_cap_tiers,
+                "memory": memory_cost.model_dump(mode="json"),
+            },
         )
         request_text = bundle.system + "\x00" + bundle.user
         try:
