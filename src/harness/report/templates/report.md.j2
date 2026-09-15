@@ -1,0 +1,121 @@
+# Investigation report - {{ run.run_id }}
+
+**Objective.** {{ run.objective }}
+**Skill.** {{ run.skill }}  |  **Status.** {{ run.status }}
+**Started.** {{ run.started_at }}  |  **Ended.** {{ run.ended_at }}
+**Model.** {{ run.model.model_id }} ({{ run.model.backend }}, {% if run.model.is_local %}local{% else %}remote - egress enabled{% endif %}), tokenizer {{ run.model.tokenizer_id }}
+**Scope.** {{ run.scope_id }} (sha256:{{ run.scope_sha256[:16] }})
+{% if run.dry_run %}
+> **Dry run.** Nothing was executed. Every provider call below is rendered as an intention.
+{% endif %}
+
+## Safety architecture
+
+- Scope is a signed authorisation record verified before any model call; no valid signature, no run.
+- Targets are addressed by opaque grants. The model never sees or supplies a host, port or path.
+- Untrusted text is data-only, wrapped in a per-run nonce; instruction-shaped payloads are reported as observations, not obeyed.
+- Commands are argv arrays built by the harness; there is no shell interpolation anywhere.
+- Every artifact is content-addressed, every evidence span is recomputable, and every event is hash-chained.
+{% if run.remote_egress %}
+- **This run enabled remote egress.** Its context assumptions differ from a local-only run.
+{% endif %}
+
+## Headline numbers
+
+| Measure | Value |
+|---|---|
+| Steps | {{ stats.steps }} |
+| Provider calls | {{ stats.provider_calls }} |
+| Findings | {{ stats.findings }} |
+| Evidence gaps | {{ stats.gaps }} |
+| Observations | {{ stats.observations }} |
+| Prompt tokens | {{ stats.prompt_tokens }} |
+| Completion tokens | {{ stats.completion_tokens }} |
+| Calls skipped as unnecessary | {{ stats.calls_skipped }} |
+| Multi-provider expansions | {{ stats.expansions }} |
+| Provider calls refused by policy | {{ stats.provider_rejections }} |
+
+## Findings
+
+{% if findings %}
+{% for finding in findings %}
+### {{ finding.id }} - {{ finding.title }}
+
+- **Status.** {{ finding.status }}  |  **Severity.** {{ finding.severity }}
+{% if finding.cve %}- **CVE.** {{ finding.cve | join(', ') }}{% endif %}
+{% if finding.cpe %}- **CPE.** {{ finding.cpe | join(', ') }}{% endif %}
+
+{% for claim in finding.claims %}
+{{ loop.index }}. _{{ claim.assertion }}{% if claim.rule_id %} via {{ claim.rule_id }}{% endif %}_ - {{ claim.statement }}
+   - confidence: {{ claim.confidence }} ({{ claim.confidence_basis }})
+{% if claim.supports %}   - supported by: {{ claim.supports | join(', ') }}
+{% endif %}{% if claim.caveats %}   - caveats: {{ claim.caveats | join('; ') }}
+{% endif %}{% endfor %}
+{% if finding.narrative %}
+{{ finding.narrative }}
+{% endif %}
+{% for ref in finding.evidence %}
+- evidence: `{{ ref.artifact }}` bytes {{ ref.byte_start }}-{{ ref.byte_end }}{% if ref.locator %} ({{ ref.locator }}){% endif %} span {{ ref.span_sha256[:16] }}
+{% endfor %}
+{% endfor %}
+{% else %}
+No finding met the provenance invariants in this run.
+{% endif %}
+
+## Evidence gaps
+
+{% if gaps %}
+| Gap | Kind | Capability | Impact |
+|---|---|---|---|
+{% for gap in gaps %}
+| {{ gap.id }} | {{ gap.kind }} | {{ gap.capability or '-' }} | {{ gap.impact }} |
+{% endfor %}
+{% else %}
+None. Every declared evidence need was satisfied within budget.
+{% endif %}
+
+## Provider routing
+
+Every capability request produces a decision, including the ones where nothing ran. This is how the
+report answers not only *what ran* but *why an available tool did not*. A missing match is never
+reported as safety.
+
+{% for decision in decisions %}
+- **{{ decision.capability }}** - verdict `{{ decision.verdict }}`{% if decision.expansion_reason %} (expansion: {{ decision.expansion_reason }}){% endif %}
+  - selected: {{ decision.selected | join(', ') or '-' }}; considered: {{ decision.considered | join(', ') or '-' }}
+  - reason: {{ decision.reason }}
+{% for provider, why in decision.rejected.items() %}
+  - rejected `{{ provider }}`: {{ why }}
+{% endfor %}
+{% endfor %}
+
+## What the harness refused
+
+{% if refusals %}
+{% for item in refusals %}
+- `{{ item.capability }}` on grant `{{ item.grant }}` - {{ item.reason }}
+{% endfor %}
+{% else %}
+Nothing was refused in this run.
+{% endif %}
+
+## Memory
+
+- baseline `sha256:{{ run.memory.baseline_sha256[:16] }}`, active `sha256:{{ run.memory.active_sha256[:16] }}`
+{% if retrieved %}
+- retrieved for this run: {% for hit in retrieved %}`{{ hit.id }}` ({{ hit.kind }}){% if not loop.last %}, {% endif %}{% endfor %}
+{% else %}
+- no long-lived memory was retrieved for this objective
+{% endif %}
+
+Memory shapes planning and never proves a finding. Every claim above resolves to a current-run
+artifact span; none resolves to a memory entry.
+
+## Integrity
+
+- event chain: {{ integrity.event_count }} events, {{ 'verified' if integrity.chain_verified else 'BROKEN' }}
+- artifacts: {{ integrity.artifact_count }} content-addressed files, {{ integrity.evidence_refs }} evidence refs recomputed
+- finding digests: {% for fid, digest in integrity.finding_digests.items() %}`{{ fid }}` = `{{ digest[:16] }}`{% if not loop.last %}, {% endif %}{% endfor %}
+{% for problem in integrity.problems %}
+- **problem:** {{ problem }}
+{% endfor %}

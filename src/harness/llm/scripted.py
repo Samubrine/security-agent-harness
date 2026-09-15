@@ -96,7 +96,17 @@ class ScriptedModelClient:
         self, digest: Mapping[str, Any], capabilities: list[dict[str, Any]]
     ) -> AgentTurn:
         observed_kinds = {str(obs.get("kind")) for obs in digest.get("observations") or []}
-        executed = [str(e.get("capability")) for e in digest.get("executed") or []]
+        # Progress is tracked per (capability, grant), not per capability: a call that failed is
+        # still worth retrying on the same grant, while a call that completed moves on to the next
+        # offered grant (for example, the second log file).
+        completed = {
+            (str(e.get("capability")), str(e.get("grant")))
+            for e in digest.get("executed") or []
+            if e.get("exit_status") == "completed"
+        }
+        denied = {
+            str(item.get("capability")) for item in digest.get("denied") or [] if isinstance(item, Mapping)
+        }
         objective_kind = str(digest.get("objective_kind") or "")
 
         plan = self._explicit_plan or [
@@ -117,11 +127,11 @@ class ScriptedModelClient:
             expected = {str(k) for k in (cap.get("expected_kinds") or [])}
             if expected and expected <= observed_kinds:
                 continue
-            # Two completed attempts with nothing new is the deterministic stand-in's way of
-            # saying "this is not going to converge"; a real model would be re-prompted instead.
-            if executed.count(name) >= 2:
+            if name in denied:
                 continue
-            grant = grants[0]
+            grant = next((g for g in grants if (name, str(g.get("grant"))) not in completed), None)
+            if grant is None:
+                continue
             proposal = CapabilityProposal(
                 grant=str(grant.get("grant")),
                 capability=name,
