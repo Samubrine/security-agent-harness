@@ -660,3 +660,103 @@ def iso_now_str() -> str:
 
 def require_iso(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+# --------------------------------------------------------------------------------------
+# v1.1 additions: one record per honesty gap named in docs/dev/AUDIT.md section 6.
+#
+# These are additive. Nothing here changes a v1 record's shape, so a run directory written
+# by v1 still loads, and the four checks the audit found missing have somewhere to put
+# their verdict instead of being reported as prose.
+# --------------------------------------------------------------------------------------
+
+
+class ProvenanceIssue(_Base):
+    """One broken reference in a run's evidence graph.
+
+    Audit invariant 6: ``ProviderExecution.necessity_decision`` and ``.policy_decision``
+    are required fields, but nothing checked that the ids they name exist, so a record
+    citing a fabricated decision id serialised happily.
+    """
+
+    code: str
+    subject: str
+    detail: str
+    severity: Literal["error", "warning"] = "error"
+
+
+class ProvenanceAudit(_Base):
+    """The result of re-deriving a recorded run's reference graph from that run's own files."""
+
+    run_id: str
+    checked: dict[str, int] = Field(default_factory=dict)
+    issues: list[ProvenanceIssue] = Field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        """A warning is recorded but does not fail a run; only errors do."""
+        return not any(issue.severity == "error" for issue in self.issues)
+
+    def codes(self) -> list[str]:
+        return sorted({issue.code for issue in self.issues})
+
+
+class EgressAssessment(_Base):
+    """Whether a provider call may leave the local network, decided from its endpoint
+    rather than from the provider's own declaration.
+
+    ``declared_by_provider`` is kept because a disagreement between it and
+    ``egress_actually_required`` is itself the finding: the provider-side egress gap was
+    that a component was allowed to grade itself.
+    """
+
+    provider: str
+    endpoint: str | None = None
+    endpoint_class: Literal["loopback", "private", "public", "unknown"] = "unknown"
+    declared_by_provider: bool = False
+    egress_actually_required: bool = False
+    permitted: bool = True
+    reasons: list[str] = Field(default_factory=list)
+
+    @property
+    def declaration_mismatch(self) -> bool:
+        return self.declared_by_provider != self.egress_actually_required
+
+
+class FollowUpNeed(_Base):
+    """A concrete evidence need derived from run state rather than from the model.
+
+    Design 08 says a conflict *may* create a new evidence need; the audit found nothing
+    made that happen. This is the deterministic object the loop feeds back to the
+    necessity gate so that a conflict schedules its own resolving call.
+    """
+
+    id: str
+    run_id: str
+    capability: str
+    expects: str
+    reason: ExpansionReason
+    correlation_id: str | None = None
+    observation_ids: list[str] = Field(default_factory=list)
+    detail: str = ""
+
+
+class TierCostReport(_Base):
+    """Per-tier token attribution for one prompt, plus what the tier caps discarded."""
+
+    run_id: str = ""
+    step: int = 0
+    tiers: dict[str, int] = Field(default_factory=dict)
+    total_tokens: int = 0
+    dropped_tokens: int = 0
+    over_cap_tiers: list[str] = Field(default_factory=list)
+
+
+class MemoryCostReport(_Base):
+    """What memory cost one step, split by class, so retrieval cost is a number."""
+
+    baseline_tokens: int = 0
+    active_tokens: int = 0
+    retrieved_tokens: int = 0
+    retrieved_entries: int = 0
+    total_tokens: int = 0

@@ -656,3 +656,256 @@ Typer app with commands `run`, `replay`, `doctor`, `scope sign`, `scope verify`,
 2. Its tests pass: `.venv/bin/python -m pytest tests/<your files> -q`.
 3. No import cycle. Importing a sibling subsystem needs a comment explaining why.
 4. You report the exact files you created or changed, and anything you deliberately left out.
+
+
+## 6. v1.1 frozen contract - closing the gaps in `docs/dev/AUDIT.md` section 6
+
+Sections 0-5 still hold. This section is normative for the v1.1 workstreams and was frozen
+before any of them started. Four rules apply to all of them:
+
+- **Do not edit `harness/models.py`.** The records you need already exist:
+  `ProvenanceIssue`, `ProvenanceAudit`, `EgressAssessment`, `FollowUpNeed`,
+  `TierCostReport`, `MemoryCostReport`. Use their existing field names.
+- **Do not edit `harness/errors.py`.** `EgressViolation` already exists.
+- **Do not edit `runtime/loop.py`, `runtime/runner.py`, `policy/engine.py`, `cli.py`.**
+  The orchestrator owns the wiring. If you need a call site added there, report it.
+- **Do not import a sibling v1.1 module.** `verify`, `egress`, `replan` and `cost` must
+  each import standalone. Depend only on section 1-5 modules.
+
+### 6.1 `harness.runtime.verify` - invariant 6, referential integrity
+
+Audit finding: `ProviderExecution.necessity_decision` and `.policy_decision` are required
+fields, but nothing checked that the ids they name exist. A record citing a fabricated decision
+id serialised happily.
+
+```python
+def audit_provenance(
+    *,
+    run_id: str,
+    executions: Sequence[ProviderExecution],
+    decisions: Sequence[ProviderDecision],
+    policy_decisions: Sequence[PolicyDecision],
+    observations: Sequence[Observation],
+    findings: Sequence[Finding],
+    gaps: Sequence[EvidenceGap] = (),
+    grants: Sequence[Grant] = (),
+    known_policy_decision_ids: Collection[str] = (),
+) -> ProvenanceAudit
+def audit_run_dir(run_dir: Path) -> ProvenanceAudit
+```
+
+Each check emits a distinct `ProvenanceIssue.code`. Severity is `error` unless marked:
+
+| code | condition |
+|---|---|
+| `execution_necessity_decision_missing` | an execution's `necessity_decision` is not the id of any supplied `ProviderDecision` |
+| `execution_policy_decision_missing` | an execution's `policy_decision` is not a supplied policy decision id and not in `known_policy_decision_ids` |
+| `policy_decision_execution_mismatch` | a `PolicyDecision` has `execution_id` set to an execution id that does not cite it back (warning) |
+| `execution_grant_unknown` | `execution.grant` is not among the supplied grants, when grants were supplied |
+| `execution_run_id_mismatch` | `execution.run_id != run_id` |
+| `observation_run_id_mismatch` | `observation.run_id != run_id` |
+| `finding_run_id_mismatch` | `finding.run_id != run_id` |
+| `finding_claim_observation_missing` | a finding's claim cites an id that is neither a current-run observation nor a memory reference |
+| `decision_expand_without_reason` | verdict `expand` with no `expansion_reason`. The model validator makes this unreachable, so a hit means tampered bytes on disk |
+| `decision_satisfied_by_unknown_observation` | a `satisfied_by` id is not a current-run observation |
+| `duplicate_record_id` | two records of the same kind share an id |
+| `run_dir_incomplete` | (only from `audit_run_dir`) a required file is absent |
+| `run_dir_unreadable` | (only from `audit_run_dir`) a file is present but does not parse |
+
+`audit_run_dir(run_dir)` reads `run.json`, `executions.json` (fallback `executions.jsonl`),
+`provider-decisions.jsonl`, `policy-decisions.jsonl` (absent in v1 - see below),
+`observations.json` (fallback `.jsonl`), `findings.json`, `gaps.jsonl`, and `scope.json`
+for grants. It reconstructs real pydantic records, which is the point: **a malformed record is an
+issue, not a crash**. `audit_run_dir` must not raise for any input, including a nonexistent or
+empty directory.
+
+`run_id` for a directory audit comes from `run.json`; if that is absent, from the directory
+name.
+
+Two v1 facts to design around, both verified against `runs/doc-check`:
+
+1. `policy-decisions.jsonl` **does not exist in a v1 run directory**. Policy decision ids are
+   only recoverable from `provenance.jsonl` triples with `relation == "governed_by"`, whose
+   `subject` is the policy decision id (`pd-...`) and whose `object` is the necessity
+   decision id. When the file is absent, derive ids that way and emit a single
+   `policy_decision_record_absent` **warning** (not an error) so the weaker check is visible.
+   When the file is present it is authoritative.
+2. `POLICY_DECIDED` events in v1 do not carry the decision id. v1.1 adds
+   `policy_decision_id` to that event; read it when present but never require it.
+
+Use `harness.util.read_json` / `read_jsonl`. Do not use `json.loads` on a file you have not
+confirmed exists.
+
+### 6.2 `harness.policy.egress` - provider-side egress, invariant 12
+
+Audit finding: `ProviderSpec.requires_network_egress` is declared by the provider and trusted,
+so a remote MCP server registered with `requires_network_egress=False` is treated as a local
+source. The rest of the design never lets a component grade itself.
+
+```python
+def classify_endpoint(endpoint: str | None) -> Literal["loopback", "private", "public", "unknown"]
+def assess_provider_egress(
+    provider: str,
+    *,
+    endpoint: str | None = None,
+    declared_requires_egress: bool = False,
+    egress_enabled: bool = False,
+) -> EgressAssessment
+def require_permitted(assessment: EgressAssessment) -> None      # raises EgressViolation
+def classify_prompt_content(text: str) -> list[str]              # egress-sensitive markers found
+def redact_for_egress(text: str) -> tuple[str, int]              # redacted text, markers removed
+```
+
+Rules, all deterministic and all on the endpoint rather than the declaration:
+
+- `classify_endpoint` accepts `host`, `host:port`, `scheme://host:port/path`. Bare
+  `127.0.0.1`, `::1`, `localhost` and any `127.0.0.0/8` address are `loopback`.
+  RFC1918 (`10/8`, `172.16/12`, `192.168/16`), `169.254/16`, `fc00::/7` and `fe80::/10`
+  are `private`. A routable address, or a name that is not `localhost`, is `public`.
+  `None`, empty and unparsable input is `unknown`. A name that is not an IP literal and is not
+  `localhost` **is `public`** - a DNS name resolves somewhere, and assuming otherwise is the bug
+  being fixed. Never resolve anything: no `socket`, no `getaddrinfo`.
+- `egress_actually_required` is true only for `public`.
+- `permitted` is `not egress_actually_required or egress_enabled`.
+- `unknown` is **not** permitted unless `egress_enabled`: an endpoint the harness cannot
+  classify must not be treated as local.
+- `declared_by_provider` echoes `declared_requires_egress`; a disagreement with
+  `egress_actually_required` is recorded in `reasons` as a `declaration_mismatch` entry even
+  when the call is permitted, because policy's risk computation used the declaration.
+- `require_permitted` raises `EgressViolation` whose message names the provider and the class.
+
+`classify_prompt_content` returns the sorted, deduplicated set of markers that must not leave
+the machine, one entry per marker class: `artifact_digest` (a `sha256:<64 hex>`),
+`evidence_span` (`byte_start`/`byte_end` style span reference, or an `EvidenceRef` field
+name), `memory_reference` (a `mem-<hex>` id), `memory_section` (a literal `MEMORY.md` or
+`BASELINE.md`), `run_identifier` (a `run-...` id). An empty list means nothing sensitive was
+recognised - it is not a certificate that the text is safe, and the docstring must say so.
+`redact_for_egress` replaces each recognised marker with `[redacted:<class>]` and returns the
+count of substitutions.
+
+### 6.3 `harness.runtime.replan` - conflict-driven re-planning
+
+Audit finding: a conflict is detected and displayed, but nothing schedules a resolving call. The
+necessity gate *would* expand with `conflict_resolution` if the model asked again; nothing
+forces it to ask.
+
+```python
+CAPABILITY_FOR_KIND: dict[str, str]        # observation kind -> logical capability
+
+def follow_up_needs(
+    *,
+    run_id: str,
+    conflicts: Sequence[Correlation],
+    observations: Mapping[str, Observation],
+    decisions: Sequence[ProviderDecision] = (),
+    already_attempted: Collection[str] = (),
+    max_needs: int = 2,
+) -> list[FollowUpNeed]
+```
+
+- Only `relation == "conflict"` correlations produce a need. `agreement` and `complement`
+  never do: turning agreement into another call is exactly the wasted provider call the necessity
+  gate exists to prevent.
+- `CAPABILITY_FOR_KIND` is derived at import time by inverting
+  `harness.providers.necessity.CAPABILITY_OUTPUT_KINDS`. Import it; do not restate it.
+- For each conflict, the capability is the one that serves the observation kinds of the
+  observations named in the correlation. If neither observation's kind maps to a capability, the
+  conflict produces no need.
+- A capability that is already in `already_attempted` produces no need - one resolving call per
+  capability, or the run loops. Also skip a capability that any earlier decision already expanded
+  for `conflict_resolution`.
+- Output is deterministic: sorted by `(capability, correlation_id)`, at most one need per
+  capability, truncated to `max_needs`. Ids come from `new_id("fn")`.
+- `reason` is always `"conflict_resolution"`; `observation_ids` is the correlation's
+  observation ids, sorted; `detail` names the conflicting values in one line.
+
+### 6.4 `harness.context.cost` - the telemetry the v2 optimizer would need
+
+Audit finding: compression, cache and memory-retrieval telemetry are not recorded, so a future
+optimizer would have less to learn from than design 08 section 9 implies.
+
+```python
+def attribute_prompt_cost(
+    *, tiers: Mapping[str, int], tier_caps: Mapping[str, int] | None = None,
+    run_id: str = "", step: int = 0,
+) -> TierCostReport
+def memory_retrieval_cost(
+    *, baseline_text: str, active_text: str, retrieved: Sequence[RetrievedMemory]
+) -> MemoryCostReport
+def compression_savings(*, raw_text: str, clamped_text: str) -> int
+```
+
+- `attribute_prompt_cost` fills `tiers` (echoed, sorted by name), `total_tokens` as their sum,
+  `over_cap_tiers` as the sorted tier names whose cap they exceed, and `dropped_tokens` as the
+  sum of the overages. A tier with no cap in `tier_caps` is never over cap.
+- `memory_retrieval_cost` uses `harness.util.estimate_tokens` on the baseline text, the active
+  text and each retrieved entry's `summary`. `retrieved_entries` is the count of entries, not a
+  token count.
+- `compression_savings` returns `estimate_tokens(raw) - estimate_tokens(clamped)`, floored at 0.
+  It measures what a tier cap discarded, and a negative result would mean the "clamped" text grew.
+
+### 6.5 `eval/` - make the unmeasured metrics measured
+
+Audit finding: `replay_fidelity` returns `not_measured` in every scenario because a scenario
+run performs no replay pass; and the three memory metrics and the token metric are computed
+nowhere. Everything needed is already on disk.
+
+Write scope: `eval/replay_pass.py` (new), `eval/metrics.py`, `eval/runner.py`,
+`eval/scenarios/*.json`, `eval/ground_truth.json`, `tests/test_eval_replay_pass.py`.
+
+```python
+# eval/replay_pass.py
+@dataclass
+class ReplayPass:
+    run_id: str
+    replayed_finding_digests: dict[str, str]
+    live_finding_digests: dict[str, str]
+    rederived: int
+    observations_used: int
+    problems: list[str]
+
+def rederive_findings(run_dir: Path) -> ReplayPass
+def augment_replay_json(run_dir: Path) -> ReplayPass          # writes, returns
+```
+
+`rederive_findings` is a genuine re-derivation, not a re-read: it loads the run's recorded
+observations and re-runs the harness's own deterministic pipeline -
+`harness.analysers.rules.RuleEngine`, `harness.analysers.cve_match.VulnerabilitySnapshot` +
+`candidate_cves`, `harness.analysers.correlate.Correlator`, `harness.findings.builder.build_findings`
+- then hashes the result with `harness.util.canonical_json` + `sha256_text`, keyed by finding id.
+`live_finding_digests` are the same hashes over the recorded `findings.json`. If those two maps
+disagree, the run's own observations do not imply its findings, which is precisely the property
+worth measuring.
+
+The vulnerability snapshot for the re-derivation comes from `tests/fixtures/vuln/snapshot_2026-09.json`.
+That path is a *test fixture*, and using it from `eval/` is a deliberate, documented shortcut:
+report it in your final message. Prefer accepting a `snapshot_path` argument with that default.
+
+Required changes to `eval/metrics.py`:
+
+- `RunBundle` gains `policy_decisions: list[dict] | None = None`,
+  `memory_events: list[dict] | None = None` and `ledger: list[dict] | None = None`, each
+  `None` when the underlying file is absent, so `not_measured` stays honest.
+- `load_run_bundle` populates them from `policy-decisions.jsonl`, `events.jsonl` filtered to
+  `LONG_TERM_MEMORY_WRITTEN`/`MEMORY_COMPACTED`, and `trace.jsonl` ledger lines.
+- `replay_fidelity` is **unchanged** - it already reads `finding_digests` and
+  `replayed_finding_digests` from `replay.json`. Once `augment_replay_json` runs, it measures.
+- Three new metrics join `METRIC_NAMES` and `_METRIC_FUNCTIONS`, each returning
+  `not_measured` with a reason when its input is absent:
+  `memory_persistence` (share of curated runs that wrote at least one long-term entry and left the
+  active memory under its cap), `memory_evidence_isolation` (share of findings whose claims cite no
+  memory reference - must be 1.0), `memory_retrieval_cost` (tokens spent on retrieved memory,
+  reported not targeted).
+- Adding a metric to `METRIC_NAMES` fails `validate_scenario_references` unless every scenario
+  in `eval/scenarios/` carries a target for it. Add `{"kind": "report"}` targets for the cost
+  metric and `{"kind": "min", "value": 1.0}` for the isolation metric.
+
+Required change to `eval/runner.py`: after a scenario's run completes and before metrics are
+computed, call `augment_replay_json` on that scenario's run directory so the replay pass is part
+of the measurement rather than a separate manual step.
+
+Constraints: the eval harness shells out to the CLI, so tests must **not** invoke a real run. Test
+`rederive_findings` against a committed run directory (`eval/results/port_scan/run`) copied into
+`tmp_path`, and test that a *tampered* copy - one recorded finding's `statement` changed - produces
+a digest mismatch. That adversarial case is the test that matters: without it the metric could be
+measuring nothing.
