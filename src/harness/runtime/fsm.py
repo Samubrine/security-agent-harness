@@ -17,6 +17,7 @@ from harness.models import (
     EvidenceGap,
     Finding,
     Observation,
+    ProviderCallTelemetry,
     ProviderDecision,
     ProviderExecution,
 )
@@ -80,6 +81,9 @@ class RunState:
     #: Capabilities the model asked for that the runtime refused, with the reason. Kept so the
     #: report can show what was attempted, including attempts that looked like scope escapes.
     rejected_proposals: list[dict[str, Any]] = field(default_factory=list)
+    #: Per-provider-call telemetry, recorded so the v2 Token Optimizer can be evaluated against
+    #: measured traces instead of an architectural guess (design 08 section 9).
+    telemetry: list[ProviderCallTelemetry] = field(default_factory=list)
 
     def transition(self, new_state: State) -> None:
         if new_state is self.state:

@@ -170,6 +170,16 @@ def _persist(run_dir: Path, run_id: str, config: RunConfig, summary: RunSummary,
     _write_jsonl(
         run_dir / "correlations.jsonl", [c.model_dump(mode="json") for c in state.correlations]
     )
+    # Provider-call telemetry (design 08 section 9). Written in the shape the evaluation harness
+    # reads, so provider efficiency and necessity precision are measured rather than asserted.
+    telemetry = [getattr(item, "model_dump", lambda **_: item)(mode="json") for item in getattr(state, "telemetry", [])]
+    _write_jsonl(run_dir / "telemetry.jsonl", telemetry)
+    # ``trace.jsonl`` is the run's single trace per the design's layout: prompts and provider
+    # telemetry next to the token ledger. The ledger appended its own lines during the run, so the
+    # provider records are appended to the same file rather than living only in telemetry.jsonl.
+    if telemetry:
+        for record in telemetry:
+            append_jsonl(run_dir / "trace.jsonl", record)
     _write_jsonl(run_dir / "rejected-proposals.jsonl", list(state.rejected_proposals))
 
     manifest = json_safe(config.model_dump(mode="json"))

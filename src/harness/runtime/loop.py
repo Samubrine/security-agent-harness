@@ -11,7 +11,7 @@ judgement rather than sequencing, it is in the wrong file.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence
 
@@ -33,6 +33,7 @@ from harness.models import (
     CapabilityProposal,
     EvidenceGap,
     Observation,
+    ProviderCallTelemetry,
     ProviderDecision,
     ProviderExecution,
     RunConfig,
@@ -75,6 +76,20 @@ LOG_FILES = ("auth.log", "nginx_access.log")
 class LoopOutcome:
     state: RunState
     summary: RunSummary
+
+
+@dataclass
+class _ParsedSummary:
+    """What one parse contributed, measured against what the run already knew.
+
+    Novelty is what makes a second provider's contribution distinguishable from a repeat of the
+    first one's, and it is one of the signals the v2 Token Optimizer is meant to be trained on.
+    """
+
+    new_keys: list[str] = field(default_factory=list)
+    duplicate_keys: list[str] = field(default_factory=list)
+    duplicate_observations: int = 0
+    observations: int = 0
 
 
 class InvestigationLoop:
@@ -129,11 +144,14 @@ class InvestigationLoop:
 
         self.state = RunState(run_id=config.run_id)
         self._started_at: datetime = utcnow()
-        self._telemetry: list[Any] = []
+        # Aliased rather than duplicated: the telemetry belongs to the run state, so a caller that
+        # holds the state holds the trace.
+        self._telemetry = self.state.telemetry
         # One entry per attempted provider call, carrying the arguments that were proposed. A
         # planner needs the arguments to tell "I already read auth.log" from "I still have not read
         # nginx_access.log"; two calls can share one grant and differ only in their arguments.
         self._attempts: list[dict[str, Any]] = []
+        self._seen_observation_keys: set[str] = set()
         self._last_gap_count = 0
         self._last_finding_ids: set[str] = set()
 
@@ -528,6 +546,7 @@ class InvestigationLoop:
         self.budgets.success()
         self.state.consecutive_failures = 0
         self.budgets.provider_call()
+        cache_hit = cache_key(provider_id, proposal.capability) in self.state.cache
         # Recorded so the necessity gate can tell "a provider already ran for this capability"
         # from "nobody has tried yet", which is the difference between a real coverage gap and the
         # first call for a need.
@@ -546,7 +565,26 @@ class InvestigationLoop:
             "PROVIDER_COMPLETED",
             {"provider": provider_id, "capability": proposal.capability, "execution": execution.id},
         )
-        self._parse(result, execution, metadata.digest, spec, grant.alias)
+        parsed = self._parse(result, execution, metadata.digest, spec, grant.alias)
+        # The telemetry design 08 section 9 requires v1 to record. It is written now because the
+        # v2 Token Optimizer is meant to be an optimisation over measured traces rather than an
+        # architectural guess, and a trace that was never collected cannot be revisited.
+        self._telemetry.append(
+            ProviderCallTelemetry(
+                execution_id=execution.id,
+                provider=provider_id,
+                capability=proposal.capability,
+                step=self.state.step,
+                payload_bytes=len(result.stdout or b""),
+                normalized_observations=parsed.observations,
+                duplicate_observations=parsed.duplicate_observations,
+                new_observation_keys=sorted(parsed.new_keys),
+                duplicate_keys=sorted(parsed.duplicate_keys),
+                cache_hit=cache_hit,
+                latency_ms=int((ended - started).total_seconds() * 1000),
+                expansion_reason=decision.expansion_reason,
+            )
+        )
         self._goto(State.CORRELATING)
         self._correlate()
         self._goto(State.FINDINGS)
@@ -559,7 +597,7 @@ class InvestigationLoop:
         digest: str,
         spec: Any,
         target_alias: str,
-    ) -> None:
+    ) -> Any:
         self._goto(State.PARSING)
         if not result.stdout:
             self._add_gap(
@@ -567,7 +605,7 @@ class InvestigationLoop:
                 capability=execution.capability,
                 impact="provider completed without producing output",
             )
-            return
+            return _ParsedSummary()
         store = self.store
 
         def evidence_of(byte_start: int, byte_end: int) -> list[Any]:
@@ -585,7 +623,17 @@ class InvestigationLoop:
             # and it is the only one an observation may carry into a prompt.
             target=target_alias,
         )
+        summary = _ParsedSummary(observations=len(parsed.observations))
         for observation in parsed.observations:
+            # Novelty is measured against what the run already knew, which is what makes a second
+            # provider's contribution distinguishable from a repeat of the first one's.
+            key = observation.correlation_key()
+            if key in self._seen_observation_keys:
+                summary.duplicate_observations += 1
+                summary.duplicate_keys.append(key)
+            else:
+                summary.new_keys.append(key)
+            self._seen_observation_keys.add(key)
             self.state.observations[observation.id] = observation
             self.provenance.add(observation.id, "derived_from", digest, kind=observation.kind)
             self.events.append(
@@ -600,6 +648,7 @@ class InvestigationLoop:
         for gap in list(parsed.gaps) + list(result.gaps or []):
             self.state.gaps.append(gap)
             self.events.append("GAP_ADDED", {"gap": gap.id, "kind": gap.kind, "impact": gap.impact})
+        return summary
 
     def _correlate(self) -> None:
         correlations = self.correlator.add(list(self.state.observations.values()))
@@ -656,6 +705,15 @@ class InvestigationLoop:
                 {"scope": "finding", "finding": bad.id, "title": bad.title},
             )
         new_ids = {f.id for f in accepted}
+        # Attributes the outcome of the derivation to the provider calls that made this step
+        # possible, so "did that call change anything?" is answerable per call rather than per run.
+        changed = new_ids != self._last_finding_ids
+        closed_gap = len(self.state.gaps) < self._last_gap_count
+        for entry in self._telemetry:
+            if entry.step == self.state.step:
+                entry.changed_finding = changed
+                entry.closed_gap = closed_gap
+        self._last_gap_count = len(self.state.gaps)
         for finding in accepted:
             if finding.id in self._last_finding_ids:
                 continue
