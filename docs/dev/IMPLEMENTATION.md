@@ -19,6 +19,42 @@ A map from the design to the code, and the recipes for extending it. Read
 | 08 memory and routing | `memory/` (section 2), `providers/` (sections 3 and 4), `providers/necessity.py` (the section 4 rules), `runtime/capabilities.py` (the binding the model needs), the telemetry in `models.ProviderCallTelemetry` (section 9) |
 | decisions.md | D1 `runtime/loop.py`; D2 `findings/validate.py`; D4 `policy/grants.py`; D5 `analysers/`; D8 `analysers/cve_match.py`; D12 `memory/`; D13 `providers/`; D14 `events.py`; D15 `runtime/fsm.py`; D16 `models.py` plus `llm/schemas.py`; D17 `policy/taint.py`; D18 `tokens.py`; D21 `llm/client.py` (loopback enforcement); D22 `providers/necessity.py` |
 
++## v1.1 - what the first audit's gap list turned into
+
+`docs/dev/AUDIT.md` section 6 named eight places where the implementation was weaker than the prose
+around it. Five of them were closed by the v1.1 work. The rest are still open and are listed below
+`v1.1` rather than here, because a reader should not have to diff two documents to find out.
+
+| Gap from AUDIT.md section 6 | What changed | Where |
+|---|---|---|
+| Invariant 6: a cited decision id was required but unresolvable | Policy decisions are persisted, the `POLICY_DECIDED` event carries `policy_decision_id`, and `runtime/verify.py` re-derives the reference graph from a run directory and reports every broken reference | `policy/engine.py`, `runtime/runner.py`, `runtime/verify.py` |
+| Invariant 12: no provider-side egress gate | Egress is decided from the transport the harness chose, never from the provider's own declaration. A provider is assessed before the loop starts and a refused one stops the run | `policy/egress.py`, `runtime/runner.py` |
+| Invariant 12 (grant references) | A run records the grants it minted. Grant ids come from `new_id`, so they cannot be re-derived from the scope record; without the file every execution reference would look unknown | `runtime/runner.py`, `runtime/verify.py` |
+| Conflicts detected but never acted on | A conflict schedules its own resolving call, through the ordinary validate/necessity/policy path, before the model is asked | `runtime/replan.py`, `runtime/loop.py` |
+| Compression, cache and memory-retrieval telemetry not recorded | `CONTEXT_ASSEMBLED` records per-tier cost, what the tier caps discarded, and what memory cost, on every model turn | `context/cost.py`, `runtime/loop.py` |
+| Replay fidelity and the three memory metrics never measured | `replay_fidelity` performs a real re-derivation from recorded observations; three memory metrics joined the set | `eval/replay_pass.py`, `eval/metrics.py`, `eval/runner.py` |
+
+### Run directory artifacts added in v1.1
+
+| File | Contents | Why it exists |
+|---|---|---|
+| `policy-decisions.jsonl` | every policy verdict, including denies | an execution's `policy_decision` field was required but unresolvable, and a denied call produces no execution at all, so this was the only place to learn why an action did not happen |
+| `grants.json` | the grants the run minted | grant ids are random, so they cannot be re-derived from `scope.json` |
+| `follow-ups.jsonl` | evidence needs a conflict created without a model turn | distinguishes a call the harness scheduled from one the planner asked for |
+| `egress.json` | one assessment per registered provider | evidence that each provider was judged on how the harness reached it, not on what it claimed |
+| `replay-report.json` | the replay pass result, digest maps included | **not** `replay.json`: that file is the JSONL model/provider trace `ReplayModelClient` reads, and writing the report over it broke offline replay |
+
+### Two integration bugs the v1.1 work exposed rather than introduced
+
+- **`FINDINGS -> POLICY` was an illegal transition.** `_pursue` loops over every provider a
+  necessity decision selected, and `_run_provider` leaves the machine at `FINDINGS`. The second
+  provider's gate step therefore asserted `illegal transition findings -> policy`. It had never
+  fired because the only two paths that select two providers - `conflict_resolution` and
+  `trust_diversity` - had never executed. No committed run directory contains a single correlation.
+- **`verify.py` reported a clean grant check over zero grants.** It read a top-level `grants` key
+  from `scope.json`, which a `ScopeFile` does not have, so the check was silently dead. It now
+  reports `grants_record_absent` as a warning rather than implying it checked something.
+
 ## The capability model, once
 
 There are two capability vocabularies and conflating them is the mistake that makes a system either
@@ -108,11 +144,12 @@ feeds. `make eval` signs nothing and builds nothing, so run `make scope` once fi
 | Absent | Why |
 |---|---|
 | v2 Token Optimizer | Decision D23 defers it until v1 traces exist to tune against. Provider-call telemetry is recorded so those traces exist. |
-| Automatic re-planning on a provider conflict | Conflicts are detected, stored, attached to findings as caveats and rendered in the report; nothing schedules a resolving call on its own. The necessity gate will expand with `conflict_resolution` if the model asks again. |
-| Provider-side egress policy | The model endpoint is loopback-enforced in code. A provider declares its own `requires_network_egress` and is trusted about it, which is weaker than the rest of the design. |
+| Conflict re-planning that a real run can reach | The wiring exists and is tested (`runtime/replan.py`, `runtime/loop.py`), but **no shipped run reaches it**: a conflict needs two providers to observe one subject, and the scripted planner re-requests a capability only after a *failed* attempt - a successful one is recorded as completed and skipped. No committed run directory contains a single correlation. `tests/test_integration_v11.py::test_with_the_shipped_planner_no_conflict_is_reachable` asserts that limit rather than leaving it to be discovered. |
+| Prompt-content egress filtering | `policy/egress.py` provides `classify_prompt_content` and `redact_for_egress`, and they are tested, but **nothing calls them**. A run with remote inference enabled still sends whatever the context builder assembled. Provider-side egress is enforced; prompt-side is not. |
+| Auditing a run from the CLI | `runtime/verify.py` re-derives a run's reference graph and reports every broken reference, but `audit_run_dir` is called only from tests. `harness replay` verifies the event chain and evidence spans; it does not call the provenance audit, so an operator has no command that reports a dangling decision or grant reference. |
+| Skill-requested independent verification | The necessity gate supports `trust_diversity_required`, and design 08 lists `independent_verification` as a legal expansion reason, but the loop never sets the flag: no skill can ask for its conclusion to rest on two sources. This is also one of the two paths that would make a conflict reachable. |
+| Memory persistence as a **cap** check | `memory_persistence` measures whether every promoted entry names its source run. It does not measure that `MEMORY.md` ended under its byte cap, because the active file lives in the workspace rather than in the run directory. The cap itself is still enforced and tested by `MemoryManager`. |
 | Active verification (`nuclei`, `http.probe`, exploitation of any kind) | Out of scope by decision. It is also why no finding can reach status `confirmed` from a version match: only an observation of the thing itself does that. |
-| Memory retrieval cost, memory persistence and memory-evidence isolation as **metrics** | The properties are tested (`tests/test_memory.py`, `analysers`/`findings` validators); the evaluation plan asks for them as measured numbers and nothing computes them yet. |
-| Replay fidelity as a **measured** metric | The evaluator has the metric but a scenario run performs no replay pass, so it reports `not_measured`. The property is verified in `tests/test_replay_offline.py`. |
 | A live lab run and a real `nmap` scan | Neither was possible in the environment this was built in. The lab is validated as configuration and the scanner adapter is tested for its degradation path. |
 | Third-party MCP server interoperability | The client is exercised over a real pipe against a hand-written server, including a misbehaving one. A real external server was not available. |
 | Production SIEM integration, exploitation, persistence, lateral movement | Non-goals in design 00 section 5. |

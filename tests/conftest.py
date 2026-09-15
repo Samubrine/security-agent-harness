@@ -64,6 +64,26 @@ def run_id() -> str:
     return "run-test-0001"
 
 
+@pytest.fixture(scope="session")
+def recorded_run_dir(fixtures_dir: Path) -> Path:
+    """A frozen, tracked copy of a real recorded run directory.
+
+    Deliberately under ``tests/fixtures`` and not ``eval/results``. That directory is gitignored - it
+    is the local output of ``make eval`` - so a test reading it would pass on the machine that
+    generated it and fail on a fresh clone, which is the worst of both worlds: a green suite that
+    proves nothing about the repository.
+
+    The directory is frozen rather than produced per test because grant, execution, decision and
+    observation ids come from ``new_id`` and are random, so a regenerated run cannot satisfy a test
+    that asserts a specific id. Tests that need a *fresh* run build one in ``tmp_path`` through the
+    spine instead.
+    """
+    path = fixtures_dir / "run" / "port_scan"
+    assert path.is_dir(), f"the frozen recorded run is missing at {path}"
+    assert (path / "executions.json").is_file(), f"{path} is not a recorded run directory"
+    return path
+
+
 # ---------------------------------------------------------------------------------------------
 # Scenario support
 #

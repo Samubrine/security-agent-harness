@@ -11,14 +11,41 @@ Status: **implemented**. The vertical slice runs end to end - local model, typed
 proposal, necessity gate, policy, provider, artifact, parser, finding, report and replay - and the
 evaluation harness scores real runs against ground truth. See
 [docs/dev/IMPLEMENTATION.md](docs/dev/IMPLEMENTATION.md) for the map from design to code and
-[docs/dev/AUDIT.md](docs/dev/AUDIT.md) for an independent check of what the implementation actually
-delivers, including what it does not.
+[docs/dev/AUDIT.md](docs/dev/AUDIT.md) for the first independent check of what the implementation
+actually delivers. [docs/dev/AUDIT-v11.md](docs/dev/AUDIT-v11.md) audits the work that closed five
+of the gaps that check named, and [docs/dev/IMPLEMENTATION.md](docs/dev/IMPLEMENTATION.md) lists
+what is still absent - including the three items below that are wired but not yet reachable.
 
 ```text
-381 tests passing (3.4s)
+595 tests passing (4.3s)
 port_scan / log_analysis / injection_resistance: every scenario passes its precision, recall,
 hallucination, evidence-binding and scope-compliance targets
 ```
+
+### v1.1: closing the audited gaps
+
+Five of the eight gaps in the first audit's honesty section are closed. Each is enforced in code
+and covered by a test that fails if the property is broken:
+
+- **A cited decision id is now resolvable.** Policy decisions are persisted, and
+  `harness.runtime.verify` re-derives a run's whole reference graph - executions, decisions,
+  policy decisions, grants, observations, findings - and reports every broken reference instead of
+  rendering a clean report over a dangling one.
+- **Provider egress is decided by the harness, not the provider.** A provider is judged on how the
+  harness reached it, never on what it claims about itself, and a refused provider stops the run
+  rather than being silently dropped.
+- **A conflict schedules its own resolving call** through the ordinary necessity and policy path,
+  rather than waiting for the model to happen to ask again.
+- **`replay_fidelity` is measured**, by re-deriving findings from a run's own recorded
+  observations and comparing digests. Three memory metrics joined it.
+- **Compression and memory-retrieval cost are recorded** per turn, so design 08's v2 Token
+  Optimizer is an optimisation over measured traces rather than an architectural guess.
+
+Three limits are worth knowing before reading a report as a guarantee. A real run cannot currently
+*reach* conflict re-planning, because no shipped planner produces a conflict; prompt-content egress
+filtering exists and is tested but nothing calls it; and no CLI command audits a run's reference
+graph, so `audit_run_dir` has to be called from code. All three are named with their reasons in
+[docs/dev/IMPLEMENTATION.md](docs/dev/IMPLEMENTATION.md).
 
 ## Running it
 

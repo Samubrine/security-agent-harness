@@ -1,0 +1,2 @@
+{"capability":"service.enumerate","decided_at":"2026-09-15T07:48:03.623324Z","execution_id":null,"grant":"g-01b9699f9c4b","id":"pd-84bbf042bc31","provider":"native:synthetic","reasons":["risk_low"],"risk":"LOW","risk_downgraded_by_taint":false,"taint_level":"T1","verdict":"allow"}
+{"capability":"vulnerability.match","decided_at":"2026-09-15T07:48:03.665500Z","execution_id":null,"grant":"g-867df972610a","id":"pd-d92f8971b8da","provider":"native:cve_matcher","reasons":["risk_low"],"risk":"LOW","risk_downgraded_by_taint":false,"taint_level":"T3","verdict":"allow"}

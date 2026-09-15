@@ -2,6 +2,12 @@
 
 Audited commit: `0b469f4` (working tree clean). Test suite at audit time: **381 passed in 3.4s**.
 
+> **This is the v1 audit and it is left as it was written.** Five of the gaps in section 6 were
+> closed afterwards; `docs/dev/AUDIT-v11.md` audits that work, and
+> `docs/dev/IMPLEMENTATION.md`'s "What is deliberately not implemented" table is the current
+> account of what is still absent. Read this document for the method and the reasoning, and the
+> other two for the state of the code.
+
 This document checks whether the implementation delivers what the design claims, and it is written so
 that every finding can be reproduced. Probes were run from a throwaway script outside the repository;
 the raw output is quoted where it matters. Where something is inspected rather than executed, it says

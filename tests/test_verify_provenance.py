@@ -5,9 +5,11 @@ necessary and authorised if the ids it cites resolve to real records. So every t
 (a) proves a broken reference is caught, or (b) proves a legitimate shape is not falsely accused.
 A test that merely executes the audit would miss exactly the failure mode the module exists for.
 
-The directory tests run against a byte copy of a real recorded run (``eval/results/port_scan``);
-the copy is tampered with one specific defect at a time and the expected issue code asserted. The
-committed bytes are never modified.
+The directory tests run against a byte copy of a real recorded run, frozen under
+``tests/fixtures/run/port_scan`` rather than read from ``eval/results/``. That directory is
+gitignored - it is the local output of ``make eval`` - so a test reading it would pass on the
+machine that produced it and fail on a fresh clone. The copy is tampered with one specific defect
+at a time and the expected issue code asserted; the fixture bytes are never modified.
 """
 
 from __future__ import annotations
@@ -38,20 +40,21 @@ from harness.util import atomic_write_json, atomic_write_text, read_json
 # Ids taken from the committed run. Asserted to exist by ``test_recorded_run_is_the_fixture`` so
 # that a regenerated fixture fails loudly instead of quietly testing nothing.
 RUN_ID = "eval-port-scan-01"
-EXEC_A = "x-4041f0f0e878"
-EXEC_B = "x-5081ebabb355"
-NECESSITY_A = "d-8f1af2d33084"
-NECESSITY_B = "d-a081bed88f0d"
-POLICY_A = "pd-98cec9e2eaaa"
-GRANT_A = "g-50c3fd8d5cbe"
-GRANT_B = "g-28ce69ff332f"
-OBS_A = "o-16128d8f6404"
+EXEC_A = "x-b3cef57e5b44"
+EXEC_B = "x-a46f4adc9afd"
+NECESSITY_A = "d-36a1522fbdba"
+NECESSITY_B = "d-d46ef1b7c343"
+POLICY_A = "pd-84bbf042bc31"
+POLICY_B = "pd-d92f8971b8da"
+GRANT_A = "g-01b9699f9c4b"
+GRANT_B = "g-867df972610a"
+OBS_A = "o-3cea4b206dc2"
 
 _NOW = datetime(2026, 9, 15, 6, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture
-def run(repo_root: Path, tmp_path: Path) -> Path:
+def run(recorded_run_dir: Path, tmp_path: Path) -> Path:
     """A writable copy of a real recorded run directory, shaped like a v1.1 run.
 
     ``grants.json`` is written in because a v1.1 run records the grants it minted, and grant ids come
@@ -61,7 +64,7 @@ def run(repo_root: Path, tmp_path: Path) -> Path:
     deliberately reproduce by removing it again.
     """
     dst = tmp_path / "run"
-    shutil.copytree(repo_root / "eval" / "results" / "port_scan" / "run", dst)
+    shutil.copytree(recorded_run_dir, dst)
     atomic_write_json(
         dst / "grants.json",
         [
@@ -365,23 +368,31 @@ def test_issue_order_is_independent_of_input_order() -> None:
 # ---------------------------------------------------------------------------------------------
 
 
-def test_recorded_run_is_the_fixture() -> None:
+def test_recorded_run_is_the_fixture(recorded_run_dir: Path) -> None:
     """Guard: if the fixture data is regenerated with different ids, fail loudly here rather than
     let every test below assert on ids it never found."""
-    ids = {e["id"] for e in read_json(Path(__file__).resolve().parents[1] / "eval/results/port_scan/run/executions.json")}
+    ids = {e["id"] for e in read_json(recorded_run_dir / "executions.json")}
     assert ids == {EXEC_A, EXEC_B}
 
 
-def test_clean_recorded_run_is_ok_with_only_the_policy_warning(run: Path) -> None:
+def test_clean_recorded_run_is_clean(run: Path) -> None:
+    """A v1.1 run is audited with no complaint at all.
+
+    The fixture is a run made after policy-decisions.jsonl and grants.json existed, so the
+    authoritative sources are present and no weaker-check warning is warranted. The v1 shape - no
+    policy file, ids recovered from provenance triples - has its own test below, which removes the
+    file first.
+    """
     audit = audit_run_dir(run)
-    # v1 ships no policy-decisions.jsonl, so exactly one warning about the weaker check.
-    assert [(i.code, i.severity) for i in audit.issues] == [("policy_decision_record_absent", "warning")]
+    assert audit.issues == []
     assert audit.ok is True
     assert audit.run_id == RUN_ID
     assert audit.checked["executions"] == 2
     assert audit.checked["provider_decisions"] == 2
     assert audit.checked["observations"] == 16
-    # 10 policy ids recovered from provenance.jsonl governed_by triples, including both cited ones.
+    assert audit.checked["policy_decisions"] == 2
+    # Nothing had to be recovered out of band, because the records are present.
+    assert audit.checked["policy_decision_ids_derived"] == 0
     assert audit.checked["known_policy_decision_ids"] >= 2
 
 
@@ -446,23 +457,52 @@ def test_duplicate_execution_id_is_caught(run: Path) -> None:
 def test_run_directory_with_no_policy_file_derives_ids_from_governed_by(run: Path) -> None:
     """The v1 fallback: subject is the policy id, object the necessity id. Reading the triple
     backwards would produce a set nothing cites and silently pass every execution."""
+    # The fallback is what is under test, so the authoritative file is removed first.
+    (run / "policy-decisions.jsonl").unlink()
     audit = audit_run_dir(run)
     assert POLICY_A in {
         json.loads(line)["subject"] for line in (run / "provenance.jsonl").read_text().splitlines() if line
     }
     assert "execution_policy_decision_missing" not in audit.codes()
-    assert audit.checked["policy_decision_ids_derived"] == 10
+    assert audit.checked["policy_decision_ids_derived"] == 12
 
 
 def test_governed_by_derivation_fails_when_the_ids_are_removed(run: Path) -> None:
-    """Negative control for the fallback: strip the governed_by triples and the policy check, which
-    has no other source of ids, must now report both executions as unbacked."""
+    """Negative control for the whole fallback chain, not just its first link.
+
+    Policy ids can come from three places: the authoritative policy-decisions.jsonl, the
+    provenance governed_by triples, and the policy_decision_id that v1.1 events carry. Assuming the
+    first removal was enough would be exactly the mistake this test exists to catch, so it walks
+    the chain - and asserts that the middle step still passes, which is the interesting part.
+    """
+    (run / "policy-decisions.jsonl").unlink()
+
     kept = [line for line in (run / "provenance.jsonl").read_text().splitlines() if "governed_by" not in line]
     atomic_write_text(run / "provenance.jsonl", "\n".join(kept) + "\n")
     audit = audit_run_dir(run)
-    assert audit.checked["policy_decision_ids_derived"] == 0
-    assert audit.codes() == ["execution_policy_decision_missing", "policy_decision_record_absent"]
+    # The events still carry the ids, and v1.1 writes them, so the check still holds. This is a
+    # stronger result than the old test asserted, not a weaker one.
+    assert audit.checked["policy_decision_ids_derived"] == 2
+    assert "execution_policy_decision_missing" not in audit.codes()
 
+    # Strip the third source: the id inside each POLICY_DECIDED event. Prose and severity are kept
+    # so the only thing that changes is the id the audit can accept.
+    events = []
+    for line in (run / "events.jsonl").read_text().splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if event.get("type") == "POLICY_DECIDED" and isinstance(event.get("data"), dict):
+            event["data"].pop("policy_decision_id", None)
+        events.append(json.dumps(event))
+    atomic_write_text(run / "events.jsonl", "\n".join(events) + "\n")
+
+    stripped = audit_run_dir(run)
+    assert stripped.checked["policy_decision_ids_derived"] == 0
+    assert stripped.codes() == [
+        "execution_policy_decision_missing",
+        "policy_decision_record_absent",
+    ]
 
 _PD_TEMPLATE = {
     "provider": "native:synthetic",
@@ -479,7 +519,7 @@ def test_policy_decisions_file_is_authoritative_when_present(run: Path) -> None:
     no record backs must not be accepted."""
     _write_jsonl(
         run / "policy-decisions.jsonl",
-        [_PD_TEMPLATE | {"id": "pd-ac3c9b3acb03", "execution_id": EXEC_B}],
+        [_PD_TEMPLATE | {"id": POLICY_B, "execution_id": EXEC_B}],
     )
     audit = audit_run_dir(run)
     assert "policy_decision_record_absent" not in audit.codes()
@@ -493,7 +533,7 @@ def test_present_policy_records_for_both_executions_are_clean(run: Path) -> None
         run / "policy-decisions.jsonl",
         [
             _PD_TEMPLATE | {"id": POLICY_A, "execution_id": EXEC_A},
-            _PD_TEMPLATE | {"id": "pd-ac3c9b3acb03", "execution_id": EXEC_B},
+            _PD_TEMPLATE | {"id": POLICY_B, "execution_id": EXEC_B},
         ],
     )
     audit = audit_run_dir(run)
@@ -506,7 +546,7 @@ def test_policy_record_pointing_at_a_non_citing_execution_warns(run: Path) -> No
         run / "policy-decisions.jsonl",
         [
             _PD_TEMPLATE | {"id": POLICY_A, "execution_id": EXEC_A},
-            _PD_TEMPLATE | {"id": "pd-ac3c9b3acb03", "execution_id": EXEC_B},
+            _PD_TEMPLATE | {"id": POLICY_B, "execution_id": EXEC_B},
             _PD_TEMPLATE | {"id": "pd-late", "execution_id": EXEC_A},
         ],
     )
@@ -534,7 +574,8 @@ def test_unknown_grant_is_caught_when_scope_carries_grants(run: Path) -> None:
     ]
     atomic_write_json(run / "scope.json", scope)
     audit = audit_run_dir(run)
-    assert audit.codes() == ["execution_grant_unknown", "policy_decision_record_absent"]
+    # policy-decisions.jsonl is present and authoritative, so there is no weaker-check warning.
+    assert audit.codes() == ["execution_grant_unknown"]
     assert {i.subject for i in audit.issues if i.code == "execution_grant_unknown"} == {EXEC_A, EXEC_B}
 
 
@@ -548,7 +589,7 @@ def test_unknown_field_in_a_record_is_unreadable_and_does_not_invent_more(run: P
 
     _mutate_json(run / "executions.json", tamper)
     audit = audit_run_dir(run)
-    assert audit.codes() == ["policy_decision_record_absent", "run_dir_unreadable"]
+    assert audit.codes() == ["run_dir_unreadable"]
     assert any(i.subject == "executions.json" for i in audit.issues)
 
 
@@ -564,7 +605,6 @@ def test_record_that_fails_validation_but_carries_its_ids_is_still_audited(run: 
     audit = audit_run_dir(run)
     assert audit.codes() == [
         "execution_necessity_decision_missing",
-        "policy_decision_record_absent",
         "run_dir_unreadable",
     ]
     assert any(i.code == "execution_necessity_decision_missing" and i.subject == EXEC_A for i in audit.issues)
@@ -586,7 +626,7 @@ def test_record_missing_a_checked_field_is_reported_but_not_guessed(run: Path) -
 
     _mutate_json(run / "observations.json", tamper)
     audit = audit_run_dir(run)
-    assert audit.codes() == ["policy_decision_record_absent", "run_dir_unreadable"]
+    assert audit.codes() == ["run_dir_unreadable"]
     assert not [i for i in audit.issues if i.code == "observation_run_id_mismatch"]
 
 
@@ -640,7 +680,9 @@ def test_deleted_required_file_does_not_raise_and_is_reported(run: Path) -> None
     ):
         (run / name).unlink()
     audit = audit_run_dir(run)
-    assert set(audit.codes()) == {"run_dir_incomplete", "policy_decision_record_absent"}
+    # grants.json and policy-decisions.jsonl survive, so neither weaker-check warning applies; what
+    # is reported is the missing authorisation record itself.
+    assert set(audit.codes()) == {"run_dir_incomplete"}
     assert {i.subject for i in audit.issues if i.code == "run_dir_incomplete"} == {
         "run.json",
         "executions.json",

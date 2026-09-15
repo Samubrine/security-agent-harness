@@ -1,0 +1,58 @@
+[
+  {
+    "declaration_mismatch": false,
+    "declared_by_provider": false,
+    "egress_actually_required": false,
+    "endpoint": null,
+    "endpoint_class": "loopback",
+    "permitted": true,
+    "provider": "native:cve_matcher",
+    "reasons": [
+      "endpoint_local",
+      "local_execution",
+      "permitted"
+    ]
+  },
+  {
+    "declaration_mismatch": false,
+    "declared_by_provider": false,
+    "egress_actually_required": false,
+    "endpoint": null,
+    "endpoint_class": "loopback",
+    "permitted": true,
+    "provider": "native:logfile",
+    "reasons": [
+      "endpoint_local",
+      "local_execution",
+      "permitted"
+    ]
+  },
+  {
+    "declaration_mismatch": false,
+    "declared_by_provider": true,
+    "egress_actually_required": false,
+    "endpoint": null,
+    "endpoint_class": "loopback",
+    "permitted": true,
+    "provider": "native:nmap",
+    "reasons": [
+      "endpoint_local",
+      "local_execution",
+      "permitted"
+    ]
+  },
+  {
+    "declaration_mismatch": false,
+    "declared_by_provider": false,
+    "egress_actually_required": false,
+    "endpoint": null,
+    "endpoint_class": "loopback",
+    "permitted": true,
+    "provider": "native:synthetic",
+    "reasons": [
+      "endpoint_local",
+      "local_execution",
+      "permitted"
+    ]
+  }
+]

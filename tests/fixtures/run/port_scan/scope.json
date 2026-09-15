@@ -1,0 +1,30 @@
+{
+  "aliases": {
+    "lab-logs": "fs:/lab/logs",
+    "lab-web-01": "net:10.77.0.11",
+    "lab-web-02": "net:10.77.0.12"
+  },
+  "authorized_by": "project-owner",
+  "dry_run": false,
+  "filesystem": [
+    "/lab/logs"
+  ],
+  "networks": [
+    {
+      "cidr": "10.77.0.0/24",
+      "include": [
+        "10.77.0.11",
+        "10.77.0.12"
+      ]
+    }
+  ],
+  "notes": "Self-hosted containers on an internal bridge with no route to the internet. 10.77.0.99 is a decoy that is deliberately excluded.",
+  "scope_id": "lab-2026-09",
+  "signature": "qfcAV5y7+ygsSEGYJiGp1mTpxSZoCU7ERgI0sjLzwYYaHe5HLGTyqt0/mDG+rVGm5t7IxqvmqtGFOgCG2CC4CQ==",
+  "signature_alg": "ed25519",
+  "signer_public_key": "IHsSIHAo4sOdWIHtA3rssmRTWqg1KMJNEoHUNPN9e7I=",
+  "window": {
+    "from_at": "2026-01-01T00:00:00Z",
+    "to": "2027-01-01T00:00:00Z"
+  }
+}

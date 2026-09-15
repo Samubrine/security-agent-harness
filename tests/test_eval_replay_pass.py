@@ -33,14 +33,17 @@ from eval.metrics import (
 from eval.replay_pass import REPLAY_REPORT, augment_replay_json, rederive_findings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-COMMITTED_RUN = REPO_ROOT / "eval" / "results" / "port_scan" / "run"
+#: The frozen recorded run. Under tests/fixtures and not eval/results, which is gitignored: a test
+#: reading a directory that only exists on the machine that ran 'make eval' passes there and fails
+#: on a clone, which is a green suite that proves nothing about the repository.
+RECORDED_RUN = Path(__file__).resolve().parent / "fixtures" / "run" / "port_scan"
 
 
 @pytest.fixture
 def run_copy(tmp_path: Path) -> Path:
     """A real recorded run, copied so a test cannot corrupt the committed evidence."""
     destination = tmp_path / "run"
-    shutil.copytree(COMMITTED_RUN, destination)
+    shutil.copytree(RECORDED_RUN, destination)
     return destination
 
 
@@ -56,7 +59,7 @@ def _truth():
 def test_a_clean_run_re_derives_its_own_findings(run_copy: Path) -> None:
     """The run's recorded observations imply the findings it recorded. That is the property."""
     result = rederive_findings(run_copy)
-    assert result.live_finding_digests, "the committed run records findings"
+    assert result.live_finding_digests, "the frozen recorded run records findings"
     assert result.replayed_finding_digests
     assert result.live_finding_digests == result.replayed_finding_digests
     assert result.observations_used > 0
@@ -102,7 +105,7 @@ def test_the_replay_report_does_not_touch_the_recorded_trace(run_copy: Path) -> 
     trace = run_copy / "replay.json"
     assert trace.is_file()
     before = trace.read_bytes()
-    # The committed trace is JSONL records, which is exactly what from_path parses.
+    # The recorded trace is JSONL records, which is exactly what from_path parses.
     first = json.loads(before.decode("utf-8").splitlines()[0])
     assert first.get("kind") in {"model", "provider"}
 
@@ -264,4 +267,3 @@ def test_memory_retrieval_cost_is_not_measured_without_events(tmp_path: Path) ->
 def test_measured_is_the_constructor_these_metrics_use() -> None:
     """Guards against a metric silently returning a bare number instead of a Metric."""
     assert measured("x", 1.0).status == "measured"
-
