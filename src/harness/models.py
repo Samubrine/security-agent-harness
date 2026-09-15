@@ -143,6 +143,11 @@ class ScopeFile(_Base):
     authorized_by: str
     networks: list[ScopeNetwork]
     filesystem: list[str] = Field(default_factory=list)
+    # alias -> resource, e.g. {"lab-web-01": "net:10.77.0.11", "lab-logs": "fs:/lab/logs"}.
+    # This mapping is the only bridge between what is authorised and what the model may name:
+    # an alias whose resource is not covered by `networks`/`filesystem` is refused at load time,
+    # so an out-of-scope host is unreachable rather than merely discouraged.
+    aliases: dict[str, str] = Field(default_factory=dict)
     window: ScopeWindow
     dry_run: bool = False
     notes: str = ""
@@ -650,4 +655,3 @@ def iso_now_str() -> str:
 
 def require_iso(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
-

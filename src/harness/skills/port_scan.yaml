@@ -1,0 +1,22 @@
+name: port_scan
+version: 0.2.0
+description: Enumerate exposed services on an authorised target and map versions to candidate CVEs.
+objective_template: "Enumerate exposed services on {target} and identify version-level weaknesses."
+inputs:
+  target:
+    type: scope_target
+    required: true
+capabilities:
+  - service.enumerate
+  - vulnerability.match
+  - http.probe
+completion_criteria:
+  - Every open port on the granted target has a service observation with product and version where the banner exposed them.
+  - Candidate CVEs are drawn only from the recorded offline snapshot and cite the service observation they matched.
+  - No candidate is reported when the observed version does not fall inside a snapshot range; absence of a match is not reported as safety.
+verification:
+  max_providers_per_need: 2
+  independent_for: []
+budget_override:
+  max_steps: 12
+  max_provider_calls: 8

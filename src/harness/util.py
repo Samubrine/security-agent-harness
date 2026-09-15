@@ -163,6 +163,56 @@ def strip_control_chars(text: str) -> str:
     return "".join(ch for ch in text if ch == "\n" or ch == "\t" or ord(ch) >= 32)
 
 
+#: Instruction-shaped phrases that are treated as *observations of interest*, never as
+#: instructions. They live here rather than in the policy package because both the parsers
+#: (which read attacker-controlled banners and log lines) and the taint gate need them, and a
+#: second copy would be a second definition of "this is an injection".
+INJECTION_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("ignore_previous_instructions", r"ignore\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above)\s+instructions?"),
+    ("disregard_instructions", r"disregard\s+(?:all\s+)?(?:previous|prior|earlier)\s+(?:instructions?|rules?|prompts?)"),
+    ("role_override", r"you\s+are\s+now\s+(?:in\s+)?[a-z]+"),
+    ("maintenance_mode", r"maintenance\s+mode\s+is\s+(?:now\s+)?active"),
+    ("system_directive", r"(?:^|\n)\s*(?:system|assistant)\s*:\s*"),
+    ("fake_authority", r"pre-?approved\s+(?:system\s+)?(?:directive|instruction|command)"),
+    ("widen_scope", r"(?:add|append|extend)\s+.{0,40}?(?:to\s+)?(?:the\s+)?(?:authorised|authorized|allowed)\s+scope"),
+    ("self_grant", r"grant\s+yourself\s+(?:access\s+)?(?:to\s+)?[a-z./]+"),
+    ("concealment", r"do\s+not\s+(?:mention|tell|report|disclose)\b"),
+    ("tool_directive", r"(?:run|execute|scan)\s+(?:a\s+)?(?:full\s+)?(?:nmap\s+)?scan\s+against\s+\d{1,3}(?:\.\d{1,3}){3}"),
+)
+
+
+def detect_injection(text: str) -> list[str]:
+    """Return the names of every injection pattern matched in ``text``.
+
+    Deliberately conservative and deterministic: a match is *evidence that the payload is
+    instruction-shaped*, which the harness turns into a finding and a taint-escalation trigger.
+    Matching is never treated as permission to act on the text.
+    """
+    import re
+
+    found: list[str] = []
+    for name, pattern in INJECTION_PATTERNS:
+        if re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE):
+            found.append(name)
+    return found
+
+
+def out_of_scope_ips(text: str, authorised: set[str]) -> list[str]:
+    """IPv4 literals in ``text`` that are not in ``authorised``.
+
+    Used to show that a payload tried to widen scope, and to make the report explicit about
+    which hosts were named and refused.
+    """
+    import re
+
+    seen = re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", text)
+    out: list[str] = []
+    for ip in seen:
+        if ip not in authorised and ip not in out:
+            out.append(ip)
+    return out
+
+
 def safe_relpath(root: Path, candidate: Path) -> Path:
     """Resolve ``candidate`` under ``root`` or raise. Used by the artifact store and
     by filesystem-scoped providers to make path traversal a structural error."""

@@ -1,0 +1,21 @@
+name: log_analysis
+version: 0.2.0
+description: Detect suspicious authentication and HTTP activity in a bounded log corpus.
+objective_template: "Detect suspicious authentication and HTTP activity in {target} logs."
+inputs:
+  target:
+    type: scope_fs_target
+    required: true
+capabilities:
+  - log.read
+  - log.query
+completion_criteria:
+  - Failed-authentication bursts are reported with the source address and the window they occurred in.
+  - A successful login that follows a burst from the same source is reported as a distinct, lower-confidence observation rather than folded into the burst.
+  - HTTP probes matching traversal or injection shapes cite the exact log line they came from.
+verification:
+  max_providers_per_need: 2
+  independent_for: []
+budget_override:
+  max_steps: 12
+  max_provider_calls: 8

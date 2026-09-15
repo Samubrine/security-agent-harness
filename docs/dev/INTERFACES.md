@@ -159,8 +159,13 @@ class TaintTracker:
                              side_effectful: bool) -> bool
     def spotlight(self, text: str, *, origin: str, level: TaintLevel = "T3") -> str
     def strip_nonce(self, text: str) -> str
-    def detect_injection(self, text: str) -> list[str]         # matched injection patterns
+def detect_injection(self, text: str) -> list[str]         # matched injection patterns
 ```
+
+`TaintTracker.detect_injection` must delegate to `harness.util.detect_injection` instead of
+defining its own patterns: the parsers read attacker-controlled banners too, and two pattern
+lists would be two definitions of "this payload is an injection". `harness.util` also provides
+`out_of_scope_ips(text, authorised)` for showing that a payload tried to widen scope.
 
 Policy rules to implement (see `docs/design/03-policy-and-safety.md` sections 3, 4 and 7):
 
@@ -172,6 +177,12 @@ Policy rules to implement (see `docs/design/03-policy-and-safety.md` sections 3,
 - `dry_run` never returns `allow` for a side-effectful or egress provider; it returns `deny`
   with a `dry_run` reason so the plan is still rendered.
 - A missing, expired or insufficient grant produces `deny`; `decide()` never raises.
+
+`mint_from_scope` derives one grant per entry in `ScopeFile.aliases`. The alias is the
+model-facing name and `Grant.resource` is the real one. An alias whose resource is not covered by
+the scope's `networks` or `filesystem` is a `ScopeError` at mint time, which is what makes an
+out-of-scope host unreachable instead of merely discouraged. The scope's `window` is checked at
+load time; an expired or not-yet-valid window is a `ScopeError` and the run never starts.
 
 ### harness.providers
 
@@ -250,6 +261,14 @@ Necessity rules, v1 and fully deterministic (section 4 of
    `budgets_guard.snapshot()` when a guard was supplied.
 8. Never select more than `skill.verification.max_providers_per_need` (falling back to
    `Budget.max_providers_per_need`, hard cap 3). Selecting three requires the skill to ask for it.
+
+The gate needs a deterministic definition of "the evidence already satisfies this need". Use a
+module-level `CAPABILITY_OUTPUT_KINDS: dict[str, set[str]]` mapping a capability to the
+observation kinds it is declared to produce, for example `service.enumerate` to
+`{service, host_state, scan_meta}`. A request is `satisfied` when every kind in that set is
+already present in `existing_observations`, or when a successful `cache` entry exists for the
+selected provider and its observations are already present. An unknown capability falls back to
+"not satisfied".
 
 ### harness.providers.native
 

@@ -1,0 +1,25 @@
+name: entry_point
+version: 0.2.0
+description: Correlate scan and log evidence into one supported attack-entry-point hypothesis.
+objective_template: "Correlate scan and log evidence into a supported entry-point hypothesis for {target}."
+inputs:
+  target:
+    type: scope_target
+    required: true
+capabilities:
+  - service.enumerate
+  - vulnerability.match
+  - log.read
+  - log.query
+verification:
+  max_providers_per_need: 2
+  independent_for:
+    - entry_point.hypothesis
+completion_criteria:
+  - The hypothesis cites at least one scan artifact and one log artifact from this run.
+  - Corroboration across two sources is recorded as agreement; a disagreement is recorded as a conflict, not silently resolved.
+  - Memory may shape which sources were consulted and must not appear as support for the hypothesis.
+budget_override:
+  max_steps: 16
+  max_provider_calls: 12
+allow_second_provider_by_default: true
