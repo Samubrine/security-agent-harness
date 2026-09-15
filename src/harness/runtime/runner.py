@@ -391,6 +391,15 @@ def execute_run(request: RunRequest) -> RunArtifacts:
     from harness.util import atomic_write_json as _write_json
 
     _write_json(run_dir / "scope.json", resolved.scope.model_dump(mode="json"))
+    # The minted grants, recorded so an execution's `grant` field is resolvable from the run
+    # directory alone. Minting is not re-derivable: grant ids come from `new_id`, so re-minting
+    # from scope.json produces different ids and every reference would look unknown. Recording
+    # them closes the same class of gap as policy-decisions.jsonl - a required field that nothing
+    # could check.
+    _write_json(
+        run_dir / "grants.json",
+        [grant.model_dump(mode="json") for grant in resolved.grants.grants],
+    )
     # The egress assessment is part of the run's authority record: it is the evidence that each
     # provider was judged on how the harness reached it rather than on what it claimed.
     _write_json(
