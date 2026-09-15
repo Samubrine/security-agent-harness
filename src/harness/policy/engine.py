@@ -80,6 +80,12 @@ class PolicyEngine:
         # per-engine flag, not a per-request one, so a run cannot relax it mid-investigation.
         self._strict = strict
         self.rejections = RejectionCounter()
+        #: Every verdict this engine produced, in order. Recorded here because the audit found
+        #: that an execution's `policy_decision` id was a required field that nothing could
+        #: resolve: policy decisions were never persisted, so only the id survived, inside a
+        #: provenance triple. Without a record to check against, "the field is required" was the
+        #: whole guarantee.
+        self._decisions: list[PolicyDecision] = []
 
     @property
     def dry_run(self) -> bool:
@@ -90,6 +96,40 @@ class PolicyEngine:
         return self._strict
 
     def decide(
+        self,
+        *,
+        provider: ProviderSpec,
+        capability: str,
+        grant_id: str,
+        args: dict[str, Any],
+        taint: TaintLevel = "T1",
+        proposal_authored_under_taint: bool = False,
+        novel_resource: bool = False,
+    ) -> PolicyDecision:
+        """Decide, and keep the verdict.
+
+        Recording happens at this single public boundary rather than at each return site inside
+        `_decide`, so a future early return cannot escape the record. The denied verdicts matter
+        most: they produce no provider execution, so the decision record is the only place a
+        reader can learn why an action did not happen.
+        """
+        decision = self._decide(
+            provider=provider,
+            capability=capability,
+            grant_id=grant_id,
+            args=args,
+            taint=taint,
+            proposal_authored_under_taint=proposal_authored_under_taint,
+            novel_resource=novel_resource,
+        )
+        self._decisions.append(decision)
+        return decision
+
+    def decisions(self) -> list[PolicyDecision]:
+        """The verdicts this engine produced, oldest first."""
+        return list(self._decisions)
+
+    def _decide(
         self,
         *,
         provider: ProviderSpec,

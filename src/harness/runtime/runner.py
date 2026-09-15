@@ -146,7 +146,14 @@ def _build_registry(
     return registry
 
 
-def _persist(run_dir: Path, run_id: str, config: RunConfig, summary: RunSummary, state: Any) -> None:
+def _persist(
+    run_dir: Path,
+    run_id: str,
+    config: RunConfig,
+    summary: RunSummary,
+    state: Any,
+    policy: Any = None,
+) -> None:
     from harness.util import append_jsonl
 
     observations = [obs.model_dump(mode="json") for obs in sorted(state.observations.values(), key=lambda o: o.id)]
@@ -169,6 +176,15 @@ def _persist(run_dir: Path, run_id: str, config: RunConfig, summary: RunSummary,
     _write_jsonl(
         run_dir / "correlations.jsonl", [c.model_dump(mode="json") for c in state.correlations]
     )
+    # Policy decisions are persisted in their own right, not only as an id referenced from an
+    # execution. Two reasons. Audit invariant 6: an execution's policy_decision field was
+    # required but unresolvable, so nothing could catch a record citing a fabricated id. And a
+    # denied decision produces no execution at all, so this file is the only place a reader can
+    # learn why an action did not happen.
+    policy_decisions = (
+        [d.model_dump(mode="json") for d in policy.decisions()] if policy is not None else []
+    )
+    _write_jsonl(run_dir / "policy-decisions.jsonl", policy_decisions)
     # Provider-call telemetry (design 08 section 9). Written in the shape the evaluation harness
     # reads, so provider efficiency and necessity precision are measured rather than asserted.
     telemetry = [getattr(item, "model_dump", lambda **_: item)(mode="json") for item in getattr(state, "telemetry", [])]
@@ -329,7 +345,7 @@ def execute_run(request: RunRequest) -> RunArtifacts:
     if request.enable_memory_curation:
         _curate_memory(memory, index, state, events, run_id)
 
-    _persist(run_dir, run_id, config, summary, state)
+    _persist(run_dir, run_id, config, summary, state, policy)
     # The run directory carries its own authorisation record. A run whose scope record only existed
     # on the machine that started it could not be audited later, and the scope is the artifact that
     # answers "under whose authority did this happen?".

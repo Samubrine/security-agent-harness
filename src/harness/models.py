@@ -29,6 +29,12 @@ from harness.util import iso, sha256_text
 
 Risk = Literal["LOW", "MEDIUM", "HIGH"]
 TrustClass = Literal["local_tool", "local_mcp", "external_provider"]
+#: How the harness reaches a provider. Deliberately NOT derived from
+#: requires_network_egress: nmap declares that it needs the network (it sends packets at a
+#: target) while running wholly as a local process, so that flag describes target reach, not
+#: transport. Egress policy has to key off how the process was started, which is a fact the
+#: harness owns and the provider does not get to assert about itself.
+ProviderTransport = Literal["local_subprocess", "remote_service"]
 TaintLevel = Literal["T0", "T1", "T2", "T3"]
 Nondeterminism = Literal["local-tool", "live-network", "external-provider"]
 ExitStatus = Literal["completed", "failed", "timeout", "denied"]
@@ -269,6 +275,11 @@ class ProviderSpec(_Frozen):
     risk: Risk
     trust_class: TrustClass
     requires_network_egress: bool
+    transport: ProviderTransport = "local_subprocess"
+    #: Service endpoint for a remote_service provider. Classified by harness.policy.egress and
+    #: never resolved by name - a DNS name is treated as public because it resolves somewhere,
+    #: and assuming otherwise is the mistake egress policy exists to prevent.
+    endpoint: str | None = None
     timeout_s: int = 60
     idempotent: bool = True
     estimated_cost: EstimatedCost = Field(default_factory=EstimatedCost)

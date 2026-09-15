@@ -424,6 +424,11 @@ class InvestigationLoop:
                 "verdict": policy_decision.verdict,
                 "reasons": policy_decision.reasons,
                 "taint_downgrade": policy_decision.risk_downgraded_by_taint,
+                # The id, not just the verdict. Without it a reader of events.jsonl cannot
+                # join an execution back to the policy record that authorised it, which is
+                # what audit invariant 6 asks for; before v1.1 the id existed only inside a
+                # provenance triple.
+                "policy_decision_id": policy_decision.id,
             },
         )
 

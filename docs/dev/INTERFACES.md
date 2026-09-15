@@ -750,6 +750,7 @@ def assess_provider_egress(
     endpoint: str | None = None,
     declared_requires_egress: bool = False,
     egress_enabled: bool = False,
+    local_subprocess: bool = False,
 ) -> EgressAssessment
 def require_permitted(assessment: EgressAssessment) -> None      # raises EgressViolation
 def classify_prompt_content(text: str) -> list[str]              # egress-sensitive markers found
@@ -765,10 +766,45 @@ Rules, all deterministic and all on the endpoint rather than the declaration:
   `None`, empty and unparsable input is `unknown`. A name that is not an IP literal and is not
   `localhost` **is `public`** - a DNS name resolves somewhere, and assuming otherwise is the bug
   being fixed. Never resolve anything: no `socket`, no `getaddrinfo`.
-- `egress_actually_required` is true only for `public`.
-- `permitted` is `not egress_actually_required or egress_enabled`.
-- `unknown` is **not** permitted unless `egress_enabled`: an endpoint the harness cannot
-  classify must not be treated as local.
+- `local_subprocess=True` means the harness itself executes the provider on this host: a native
+  binary, or an MCP stdio transport bound to a local argv. That is `loopback` by construction
+  and is permitted regardless of `egress_enabled`. This is a property of how the harness runs
+  the provider, not of what the provider claims about itself, which is exactly why it is a
+  separate argument from `declared_requires_egress`.
+
+```text
+endpoint_class    egress_actually_required   permitted
+loopback          False                      True
+private           False                      True    (the lab network; still local)
+public            True                       egress_enabled
+unknown           False                      egress_enabled
+```
+
+`unknown` is **not** permitted unless `egress_enabled`: an endpoint the harness cannot
+classify must not be treated as local. State this as an explicit table in the code too - the
+one-liner `permitted = not egress_actually_required or egress_enabled` is wrong, because it
+would quietly permit `unknown`.
+
+- `declared_by_provider` echoes `declared_requires_egress`; a disagreement with
+  `egress_actually_required` is recorded in `reasons` as a `declaration_mismatch` entry even
+  when the call is permitted, because policy's risk computation used the declaration.
+
+  **Except when `local_subprocess` is true.** A locally executed provider that declares
+  `requires_network_egress=True` is not making a false claim about transport - it is saying that
+  the *tool* reaches out to a target, which is a scope question the policy engine already
+  answers and which `policy/grants.py` already bounds. Recording a transport mismatch there
+  would be wrong, and it would fire on every nmap run. So:
+
+  ```text
+  local_subprocess=True   -> reasons may include "local_execution"; no declaration_mismatch,
+                            whatever declared_requires_egress says
+  local_subprocess=False  -> declaration_mismatch when declared != egress_actually_required
+  ```
+
+  `ProviderSpec` (harness.models) carries the two fields the caller needs:
+  `transport: "local_subprocess" | "remote_service"` (default `local_subprocess`) and
+  `endpoint: str | None` (default `None`). The wiring passes
+  `local_subprocess=(spec.transport == "local_subprocess")`.
 - `declared_by_provider` echoes `declared_requires_egress`; a disagreement with
   `egress_actually_required` is recorded in `reasons` as a `declaration_mismatch` entry even
   when the call is permitted, because policy's risk computation used the declaration.
