@@ -1,226 +1,239 @@
 # 01 — Architecture
 
-## 1. The governing principle: deterministic spine, probabilistic brain
+## 1. Governing principle: deterministic spine, local probabilistic brain
 
-The proposed design in the original conversation had the right instinct — separate the
-harness from the agent — but it left the LLM as the *driver* of the loop. This plan
-inverts that.
+The harness separates what must be provable from what benefits from judgement.
 
-| | Deterministic spine | Probabilistic brain |
+| | Deterministic spine | Local probabilistic brain |
 |---|---|---|
-| Owns | Run lifecycle, state, budgets, policy decisions, tool invocation, parsing, artifact storage, finding construction, report rendering | Choosing the next action, writing the narrative, proposing hypotheses |
-| Property | Reproducible, unit-testable, replayable | Non-deterministic, evaluated statistically |
-| Failure mode | Bug — caught by tests | Wrong choice — caught by evaluation |
+| Owns | run lifecycle, state, budgets, memory policy, provider necessity, routing, scope, tool invocation, parsing, evidence, findings, replay | proposing the next information need, hypotheses, final narrative |
+| Property | reproducible, unit-testable, auditable | non-deterministic, evaluated statistically |
+| Default location | local process / containers | local inference endpoint |
 
-Everything that must be *provable* lives in the spine. Everything that benefits from
-judgement lives in the brain. The boundary between them is a single typed object: the
-**ActionProposal**.
-
-Consequences that follow directly:
-
-- The LLM never emits a shell command, a file path, or a CIDR. It emits a tool name plus
-  arguments validated against that tool's schema.
-- The LLM never decides whether something is in scope, and never decides what a CVE is.
-  Those are lookups.
-- The LLM never writes a finding. It writes narrative *about* findings the spine already
-  constructed, and each narrative claim must cite finding and observation ids.
-- Therefore a hallucinated CVE, a file write, or a scan of an unauthorised subnet are
-  **type errors**, not behavioural problems we hope prompt engineering prevents.
+The model does **not** directly decide which MCP server to call. It asks for a typed capability;
+the spine determines whether another call is necessary and which provider or provider set is the
+minimum sufficient way to satisfy it.
 
 ## 2. Layers
 
 ```mermaid
 flowchart TD
-  U["User / CLI"] --> SK["Skill loader<br/>declarative objective"]
-  SK --> CR["Context resolver<br/>collect inputs, defaults"]
-  CR --> RT["Runtime<br/>state machine + budgets"]
-  RT --> AG["Agent<br/>propose next action"]
-  AG -->|ActionProposal| PE["Policy engine<br/>allow / ask / deny"]
-  PE -->|allow| TR["Tool registry"]
-  PE -->|ask| AP["Approval gate<br/>human in the loop"]
-  AP --> TR
-  PE -->|deny| RT
-  TR --> NT["Native tools"]
-  TR --> MC["MCP servers"]
-  NT --> OB["Observer<br/>capture raw output"]
-  MC --> OB
-  OB --> AR["Artifact store<br/>content-addressed"]
+  U["User / CLI"] --> SK["Skill loader"]
+  SK --> CR["Context resolver"]
+  BM["BASELINE.md"] --> CR
+  AM["MEMORY.md"] --> CR
+  LM["Long-lived memory index"] --> CR
+  CR --> RT["Runtime FSM + budgets"]
+  RT --> AG["Local model agent"]
+  AG -->|CapabilityProposal| NG["Necessity gate"]
+  NG -->|already satisfied| RT
+  NG -->|needed| PR["Provider router"]
+  PR --> REG["Capability/provider registry"]
+  REG --> NT["Native providers"]
+  REG --> M1["MCP provider A"]
+  REG --> M2["MCP provider B..N"]
+  PR --> PE["Policy engine"]
+  PE --> EX["Runner / adapter"]
+  EX --> OB["Observer"]
+  OB --> AR["Artifact store"]
   AR --> PA["Deterministic parsers"]
   PA --> OBS["Observations"]
-  OBS --> AN["Analysers<br/>rules + CVE matcher"]
-  AN --> FI["Findings + Evidence"]
-  FI --> CTX["Context builder<br/>prioritised summary"]
+  OBS --> CO["Analyser + cross-provider correlator"]
+  CO --> FI["Findings + EvidenceGaps"]
+  FI --> CTX["Context builder"]
   CTX --> RT
   FI --> RP["Reporter"]
-  RP --> OUT["Report + evidence links"]
-  RT -.-> EL["Event log<br/>append-only JSONL"]
+  RT --> MC["Post-run memory curator"]
+  MC --> AM
+  MC --> LM
+  RT -.-> EL["Hash-chained event log"]
+  NG -.-> EL
+  PR -.-> EL
   PE -.-> EL
   OB -.-> EL
-  AN -.-> EL
 ```
 
-The two dashed arrows matter: **the event log is written by the spine only**, never by the
-model, and it is the single source of truth for replay, audit, and the UI.
+The evidence graph and memory are separate on purpose. Evidence answers **what happened in this
+run?** Memory answers **what context may help the next run?** Memory may point back to prior run
+ids, but it cannot satisfy a current finding's evidence invariant.
 
-## 3. The investigation loop
+## 3. Local-first model runtime
 
-One iteration, in order. Steps 3–8 are the spine; step 4 is the only model call in the
-hot path.
+The default `ModelClient` connects only to a configured local endpoint (localhost/Unix socket).
+The backend is adapter-based so Ollama-, llama.cpp-, vLLM-, or OpenAI-compatible local servers
+can be used without changing the runtime contract.
 
-1. **Resolve context.** Load the skill, diff its declared inputs against supplied
-   context, ask the user only for what is genuinely missing, apply configured defaults.
-2. **Freeze the run.** Persist `run.json`: objective, scope, budget, skill version, tool
-   versions, model id, and a `policy_context` snapshot. Nothing about these may change
-   mid-run; a change requires a new run.
-3. **Build the action catalogue.** Enumerate every action currently *available*: tools
-   whose preconditions hold, whose capabilities the skill grants, and whose required
-   inputs exist. Each entry carries its typed schema.
-4. **Propose.** Call the model with the state digest and the action catalogue. It returns a
-   `Proposal`: a *plan* (the intended sequence, with rationale) plus exactly one
-   `next_action`. The plan is advisory — the spine never executes it unattended — but it is
-   stored, rendered in the UI, and diffed each cycle, so adaptation is visible rather than
-   implied. Validate against the schema; on invalid output, re-ask once with the validation
-   error attached, then record a gap and continue.
-5. **Gate.** The policy engine resolves the proposal to `allow`, `ask`, or `deny`.
-   `ask` blocks on the approval gate and records the human decision as an event.
-6. **Execute.** The tool runs inside the runner's sandbox with a wall-clock timeout. Raw
-   stdout/stderr become artifacts with digests.
-7. **Observe and parse.** Deterministic parsers turn artifacts into typed Observations
-   with byte-range evidence. Unparseable or empty output becomes an EvidenceGap.
-8. **Analyse.** Rule-based analysers and the CVE matcher derive Findings from
-   Observations. Findings accumulate; nothing is overwritten.
-9. **Check termination.** Stop if the agent proposed `finish`, or any budget is exhausted
-   (steps, tool calls, tokens, wall clock, artifact bytes). Budget exhaustion is a normal,
-   recorded outcome — not an exception.
-10. **Report.** The reporter renders from structured state. Narrative is generated once, at
-    the end, and is validated to cite only existing ids.
+A run freezes:
 
-## 4. Component responsibilities
-
-| Component | v1 scope | Deliberately excluded from v1 |
-|---|---|---|
-| Runtime | Loop, state machine, budgets, termination, resume-from-event-log | Parallel tool execution, sub-runs |
-| Event log | Append-only JSONL, one event per transition, monotonic sequence | Distributed log, retention policy |
-| Artifact store | Content-addressed `sha256`, sidecar metadata, provenance edges | Compression tiers, garbage collection |
-| Parsers | nmap XML, auth log, nginx access log, JSON journald | EVTX, PCAP, cloud audit logs |
-| Analysers | Rule engine with explicit rule ids; CPE→CVE version-range matcher | ML anomaly detection |
-| Tool registry | Typed specs, native tools, MCP adapter | Marketplace, versioned remote registries |
-| Policy engine | Scope check, capability grant, risk class, approval routing | Signed authorisation chains, RBAC |
-| Context builder | Tiered digest + on-demand retrieval tools | Embeddings, vector store |
-| Reporter | Deterministic markdown/JSON from structured state | PDF, dashboards, multi-format export |
-
-Note the right-hand column. Each exclusion is a decision to keep the project finishable;
-each is listed in the report as future work rather than half-built.
-
-## 5. Run state machine
-
-```mermaid
-stateDiagram-v2
-  [*] --> ContextResolution
-  ContextResolution --> AwaitingInput: required input missing
-  AwaitingInput --> ContextResolution: user supplies it
-  ContextResolution --> Planning: context complete
-  Planning --> Gating: proposal received
-  Gating --> AwaitingApproval: decision is ask
-  AwaitingApproval --> Executing: approved
-  AwaitingApproval --> Planning: rejected
-  Gating --> Executing: decision is allow
-  Gating --> Planning: decision is deny
-  Executing --> Observing: tool returned
-  Executing --> Planning: tool failed, gap recorded
-  Observing --> Analysing: parsed
-  Analysing --> Planning: budget remains and work pending
-  Analysing --> Reporting: finish proposed or budget exhausted
-  Reporting --> [*]
+```text
+model_backend
+model_id / model_digest when available
+context_window
+local tokenizer id/version
+sampling parameters
+system prompt digest
 ```
 
-Every transition emits an event. The state machine is a plain Python enum plus a transition
-table, so it is unit-testable without any model or network access — which is what makes
-replay possible.
+Remote inference is an optional adapter, disabled by default. Enabling it requires explicit
+configuration and a data-egress policy. The runtime must never silently send raw artifacts,
+long-lived memory, or retrieved evidence to a remote model.
 
-## 6. The ActionProposal contract
+## 4. Capability proposal contract
 
-This is the entire model→spine interface. It is intentionally cramped: the model chooses
-*among* actions, it does not compose them.
+The model requests a logical capability rather than naming an implementation:
 
 ```json
 {
   "plan": [
-    { "step": 1, "action": "port_scan", "intent": "enumerate exposed services" },
-    { "step": 2, "action": "cve_match", "intent": "map banners to candidate CVEs" },
-    { "step": 3, "action": "http_probe", "intent": "conditional on an HTTP service being present" }
+    {"step": 1, "capability": "service.enumerate", "intent": "identify exposed services"},
+    {"step": 2, "capability": "vulnerability.match", "intent": "map versions to candidate CVEs"}
   ],
-  "plan_change": { "revision": 2, "reason": "step 3 added: HTTP service discovered in step 1" },
   "next_action": {
-    "kind": "tool",
+    "kind": "capability",
     "grant": "g-7f21",
-    "tool": "port_scan",
-    "args": { "target": "lab-web-01", "profile": "service_detection", "ports": "top1000" },
-    "expects": "Service list with product and version banners for HTTP and SSH.",
-    "hypothesis_id": null
+    "capability": "service.enumerate",
+    "args": {"target": "lab-web-01", "profile": "service_detection"},
+    "expects": "service, product, version and CPE observations",
+    "evidence_needed": "No current service observations exist for the granted target."
   }
 }
 ```
 
-or
+The spine validates capability, grant, arguments and preconditions. Provider identities are not
+required in the model output. A skill may restrict which provider classes are allowed.
 
-```json
-{ "kind": "finish", "reason": "All planned probes complete; two candidate findings require no further evidence." }
+## 5. Provider necessity gate
+
+Availability is not necessity. Before any native tool or MCP call, the gate asks:
+
+1. Can existing current-run evidence satisfy the requested need?
+2. Is there a cached result with valid provenance and acceptable freshness?
+3. What is the cheapest/risk-lowest provider that can fill the remaining evidence gap?
+4. Is a second provider actually required?
+
+v1 is deliberately rule-based. It selects one provider by default. Additional providers are
+allowed only for one of these recorded reasons:
+
+- `coverage_gap`: one provider cannot cover the requested protocol/source/field;
+- `conflict_resolution`: existing providers disagree materially;
+- `independent_verification`: the skill/finding requires independent corroboration;
+- `provider_failure`: the first provider failed, timed out, or returned an EvidenceGap;
+- `trust_diversity`: a high-impact conclusion should not depend on one untrusted external source.
+
+Default caps: one provider per capability request, two when a multi-provider reason is present,
+and three only with an explicit skill override plus budget headroom. The runtime logs the chosen
+set and rejected candidates so token/tool efficiency is measurable.
+
+This is **not** the v2 Token Optimizer. It is a simple safety/cost gate whose behaviour can be
+unit-tested.
+
+## 6. Investigation loop
+
+1. Resolve context from user input, defaults, `BASELINE.md`, bounded `MEMORY.md`, and selective
+   long-lived-memory retrieval.
+2. Freeze run configuration, scope, model metadata, memory snapshot digests and budgets.
+3. Build a capability catalogue from skill grants and provider availability.
+4. Ask the local model for one `CapabilityProposal` plus its advisory plan.
+5. Validate the proposal.
+6. Run the necessity gate. If existing evidence is sufficient, record `CALL_SKIPPED` and re-plan.
+7. Route to the minimum sufficient provider set.
+8. Policy-gate each concrete provider invocation (`allow` / `ask` / `deny`).
+9. Execute in the sandbox; capture raw output as immutable artifacts.
+10. Parse and normalize into typed observations tagged with provider/source.
+11. Correlate provider results; preserve agreement, complement and conflict as structured state.
+12. Derive findings through deterministic rules/matchers; the model cannot author a CVE finding.
+13. Check termination/budgets and repeat if needed.
+14. Render the report.
+15. Run the post-run memory curator: propose bounded active-memory updates and durable long-lived
+    entries; validate, archive, compact if needed.
+
+## 7. Memory architecture
+
+Three tiers are intentionally different:
+
+```text
+memory/BASELINE.md      stable human-curated rules/configuration; always loaded
+MEMORY.md               bounded active working set; always loaded; compacted
+memory/long_term/*      durable entries; locally indexed; retrieved selectively
 ```
 
-Constraints enforced by the spine, not by prompting:
+`MEMORY.md` is small by contract. When it exceeds its configured ceiling, the spine snapshots it,
+deduplicates entries, promotes durable items to long-lived storage, and rewrites a compact active
+set. The local model may propose a compaction summary, but the old snapshot remains auditable.
 
-- `tool` must exist in the catalogue supplied *this* step.
-- `args` must validate against that tool's input model; unknown fields are rejected,
-  not silently dropped.
-- **`grant` is required, and there is no field for a raw target.** The model can only
-  reference a capability grant minted during context resolution; the tool resolves the real
-  host or path against that grant. An out-of-scope target has no representation in the
-  schema, so "the agent cannot leave scope" is a property of the type system rather than a
-  check that some code path might skip. See 03.
-- `activity` values are attack-controlled and arrive as **quoted data blocks**, never as
-  instructions; see 03.
+Long-lived memory uses local SQLite FTS5 in v1; no vector database is required. Retrieval results
+carry source run ids and are labeled `memory_context` in prompts.
 
-## 7. Budgets and termination
+**Memory cannot satisfy an evidence requirement.** A statement remembered from yesterday can tell
+the planner what to inspect today; it cannot prove today's finding.
 
-| Budget | Default | On exhaustion |
+## 8. Cross-provider normalization
+
+Every provider invocation produces a common envelope:
+
+```json
+{
+  "provider": "native:nmap" ,
+  "capability": "service.enumerate",
+  "execution_id": "x-...",
+  "artifact": "sha256:...",
+  "freshness": "2026-09-15T...Z",
+  "trust_class": "local_tool",
+  "observations": ["o-..."],
+  "gaps": []
+}
+```
+
+The correlator never chooses a winner by prose. It computes keyed agreements/conflicts over
+normalized observations. A conflict becomes structured state and may justify another provider
+only if the necessity gate says the extra call is worth its bounded cost in v1.
+
+## 9. Budgets and v1 token guard
+
+v1 retains hard limits for steps, tool/provider calls, prompt tokens, wall clock, artifact bytes
+and consecutive failures. It adds:
+
+- a per-run token ledger;
+- a per-step context ceiling;
+- provider-result deduplication;
+- cached normalized observations;
+- fixed context tiers and eviction order;
+- the necessity gate before provider expansion.
+
+These are controls, not optimization.
+
+## 10. Version-two Token Optimizer (deferred)
+
+v2 introduces a dedicated `TokenOptimizer` behind stable interfaces:
+
+```text
+TokenLedger -> CostEstimator -> MarginalUtilityEstimator
+                             -> ProviderPortfolioPlanner
+                             -> ContextBudgetAllocator
+                             -> MemoryRetrievalPlanner
+                             -> Compression/Dedup Cache
+```
+
+Its job is to minimize expected token/tool cost while preserving evidence coverage. Candidate
+signals include estimated local-token cost, provider payload size, observation novelty, remaining
+uncertainty, provider reliability, cache hits, phase of investigation, and required confidence.
+
+The v2 optimizer may choose among: reuse cached evidence, retrieve memory, ask the model with a
+smaller digest, call one provider, expand to a second provider, compress a result, or stop.
+
+The algorithm is intentionally **open in v1**. The interface and telemetry are designed now so
+v1 traces can later train/tune the policy rather than guessing it up front.
+
+## 11. Extension points
+
+| Add a… | Requires | Does not require |
 |---|---|---|
-| Max steps | 25 | Stop, report partial, record `budget_exhausted` |
-| Max tool calls | 15 | Same |
-| Max prompt tokens | 120k cumulative | Same |
-| Max wall clock | 20 min | Kill running tool, stop |
-| Max artifact bytes | 2 GB | Refuse further large captures, record gap |
-| Max consecutive failures | 3 | Stop; three failures in a row means the plan is wrong |
+| Skill | declarative skill file | runtime changes |
+| Native provider | adapter + provider spec | planner changes |
+| MCP provider | MCP config + capability mapping | planner/runtime loop changes |
+| Memory retriever | retrieval implementation | evidence schema changes |
+| Analyser rule | rule file | provider changes |
+| Report section | template block | policy changes |
 
-The last one is the cheapest guard against the classic agent pathology: an LLM that
-retries a failing tool forever. The spine counts, the brain cannot reset the counter.
-
-## 8. Extension points
-
-The extensibility claim is load-bearing for the project story, so the seams are explicit.
-
-| Add a… | Requires editing | Does not require editing |
-|---|---|---|
-| Skill | one YAML file | runtime, policy, tools, report |
-| Native tool | one tool module + registry entry | runtime, policy, event log, report |
-| MCP server | one JSON config entry | any Python |
-| Analyser rule | one rule file | runtime, tools, report |
-| Report section | one template block | runtime, tools, policy |
-
-Milestone 3 exists specifically to test this table: adding the `entry_point` skill must
-produce a diff containing **only new files and one registry line**. If it touches the
-runtime, the abstraction is wrong and gets fixed before the project is presented.
-
-## 9. Deliberate departures from the original design
-
-| Original proposal | This plan | Why |
-|---|---|---|
-| LLM owns the loop and chooses freely | LLM proposes; spine executes | Reproducibility, auditability, testability |
-| Free-running ReAct loop | Plan-and-execute outer loop with an explicit, re-emitted plan object | Security investigations have no natural stop condition, so unbounded ReAct drifts; a stored plan is renderable, checkpointable, and shows adaptation as a diff |
-| Policy gate that approves a target string | Capability grants minted at context resolution; tools accept grants, not targets | Converts scope enforcement from a checked invariant into a structural one |
-| "Memory" as a component | No memory module; findings and artifacts accumulate in structured stores | A memory component with no retrieval contract is a vector database waiting to happen. Accumulation over immutable stores gives the same behaviour with none of the failure modes |
-| Free-form tool output into context | Artifacts plus deterministic parser output; tiered context | Raw nmap and multi-GB logs do not fit, and reading them invites hallucination |
-| Event bus as an architecture feature | Event log as the spine's write-ahead record | A bus implies subscribers and async delivery; an append-only log is a tenth of the work and directly enables replay |
-| Policy as a checked step | Policy as the only path to execution | A check can be bypassed by a code path; a single choke point cannot |
-| Bespoke YAML skill DSL and hand-written detection rules | Sigma format for log rules; Nuclei templates for active verification; skills stay a thin declarative wrapper | Reviewers ask "why not Sigma?". Reusing a validated format buys tooling, shareability, and credibility for less work than inventing one |
-| Multi-agent planner/executor/critic | Single agent, plus a *deterministic* verifier | A critic without a verification signal is one LLM reviewing another. Re-probing a port and re-grepping a log line is real verification, and it is cheap |
+The extensibility test is that adding a second provider for an existing capability requires no
+change to the planner or investigation loop.

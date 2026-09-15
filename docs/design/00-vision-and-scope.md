@@ -2,41 +2,47 @@
 
 ## 1. Problem
 
-Security tooling is not missing tools. `nmap`, `tshark`, log parsers, SIEM queries,
-and vulnerability databases all exist and are good. What is missing is
-**orchestration and reasoning across them**: an analyst manually moves findings
-between stages, translates output formats by hand, and rebuilds the same
-correlation logic for every investigation.
+Security tooling is not missing tools. `nmap`, log parsers, vulnerability databases, Sigma,
+Nuclei and MCP-connected services already exist. What is missing is **bounded orchestration and
+reasoning across them**: an analyst manually decides which capability is actually needed next,
+translates outputs, correlates evidence, and repeatedly reconstructs context.
 
-Traditional automation solves this with a fixed pipeline: `scan → parse → report`.
-That pipeline cannot adapt. If the scan reveals an unexpected service, the pipeline
-has no way to decide "this deserves three more probes before I write the report".
+Traditional automation solves this with a fixed pipeline:
+
+```text
+scan -> parse -> report
+```
+
+That pipeline cannot adapt. A naive agent can adapt, but tends to over-call tools, duplicate
+work, inflate context, and spend tokens because another provider is available. This project
+therefore treats **tool necessity** as a first-class runtime decision.
 
 ## 2. What we are building
 
-An **agentic security investigation harness**: an extensible runtime in which
-capabilities are registered declaratively and an LLM plans the investigation.
+A **local-first agentic security investigation harness**: an extensible runtime in which skills
+request capabilities, a locally hosted LLM proposes the next information need, and a
+deterministic spine decides whether another tool/provider call is necessary.
 
-```
-Objective  →  Reason  →  Investigate  →  Discover  →  Adapt  →  Correlate  →  Report
-```
-
-versus the fixed pipeline:
-
-```
-Scan  →  Parse  →  Report
+```text
+Objective -> Reason -> Need -> Necessity Gate -> Investigate -> Correlate -> Adapt -> Report
 ```
 
-The port scanner and log analyser are **the first two skills on the harness**, not
-the product itself. That distinction is the project's story: the deliverable is the
-runtime, and the security capabilities are evidence that the runtime generalises.
+The port scanner and log analyser are the first two skills, not the product itself. The product
+is the harness: local inference, bounded persistent memory, evidence-backed state, capability
+routing, provider selection, policy enforcement, and replay.
 
-## 3. Framing the project for a report
+## 3. Core project claims
 
-| Framing | Verdict |
-|---|---|
-| "An AI port scanner" | Weak. Reads as a thin LLM wrapper. |
-| "An extensible agentic harness for security investigation, demonstrated through network scanning and log analysis" | Strong. The runtime is the contribution; the skills are the proof. |
+The project should be presented around five claims:
+
+1. **Local-first reasoning:** the default model runs locally; remote inference is explicit opt-in.
+2. **Evidence-first security:** every finding is defensible from immutable artifacts.
+3. **Persistent but bounded memory:** the agent can retain useful context across runs without
+   allowing memory to become a source of truth for findings.
+4. **Provider diversity without provider spam:** native tools and multiple MCP servers can satisfy
+   the same logical capability, but the harness selects the minimum sufficient provider set.
+5. **Auditable autonomy:** the model proposes; the deterministic spine owns scope, execution,
+   budget, evidence, memory writes and replay.
 
 ## 4. Skills in scope
 
@@ -45,70 +51,58 @@ runtime, and the security capabilities are evidence that the runtime generalises
 | `port_scan` | Enumerate exposed services on authorised targets, map to candidate vulnerabilities | Milestone 1 |
 | `log_analysis` | Detect suspicious authentication and HTTP activity in a log corpus | Milestone 2 |
 | `entry_point` | Correlate scan + log evidence into a supported attack-entry-point hypothesis | Milestone 3 |
-| `pcap_analysis`, `ioc_hunt`, `config_audit` | — | Out of scope; future work only |
-
-The third skill is deliberately chosen because it is **cross-source**: it can only
-succeed if artifacts, findings, and the event log are modelled properly. It is the
-strongest single demonstration that this is a harness and not a script.
+| `pcap_analysis`, `ioc_hunt`, `config_audit` | — | Future work |
 
 ## 5. Non-goals
 
-- **No scanning of systems we do not own.** The harness only runs against the local
-  lab defined in `lab/`. There is no public-internet target support.
-- **No exploitation.** No metasploit, no payload delivery, no credential
-  brute-forcing beyond a seeded weak-credential check. Findings are *candidates*
-  with a stated confidence basis, never demonstrated compromise.
-- **No autonomous remediation.** The harness reports; it does not patch, block, or
-  reconfigure anything.
-- **No SIEM or production-network integration.**
-- **Not a general chat assistant.** Interactions are scoped to an investigation run
-  with a lifecycle.
+- No scanning of systems we do not own; targets are local, containerised and signed into scope.
+- No exploitation, persistence, lateral movement, C2, or autonomous remediation.
+- No production SIEM integration in v1.
+- No multi-agent swarm. Provider plurality means multiple evidence sources, not multiple LLMs.
+- No requirement for a vector database.
+- No dynamic token-optimization engine in v1. v1 has hard budgets, caching, context tiers and a
+  deterministic necessity gate; a proper Token Optimizer is version two.
+- Not a general chat assistant; interactions belong to an investigation lifecycle.
 
 ## 6. Success criteria
 
-The project is successful if a grader can observe all of the following:
+The project succeeds if a grader can observe:
 
-1. **End-to-end run.** One command takes an objective and a target and produces a
-   report with findings, reproducibly.
-2. **Every finding is verifiable.** Each finding cites an artifact and a byte range;
-   opening that range shows the raw evidence. No finding lacks a citation.
-3. **Zero fabricated vulnerabilities in the evaluation corpus.** Measured, not
-   asserted — see the hallucination-rate metric in 07.
-4. **Out-of-scope action is blocked, visibly.** A seeded prompt injection in
-   attacker-controlled log content attempts to expand scope; the run shows the
-   denial in the event log and continues.
-5. **Extensibility is demonstrated, not claimed.** Adding the third skill requires
-   zero changes to runtime, policy, event, artifact, or report code — shown as a
-   diff of added files only.
-6. **Replay.** A recorded run can be re-executed deterministically and produce the
-   same findings.
+1. One command runs a full local-model investigation and produces an evidence-linked report.
+2. Every finding cites immutable current-run evidence; hallucinated CVEs fail validation.
+3. The harness resumes across runs with `BASELINE.md`, bounded `MEMORY.md`, and selectively
+   retrieved long-lived memory.
+4. Memory-only statements cannot validate a finding.
+5. A capability with several available providers normally executes only the minimum sufficient
+   one; a second provider is invoked only with a recorded necessity reason.
+6. A conflicting or incomplete first result can trigger a second provider and the report exposes
+   agreement/conflict rather than hiding it.
+7. A seeded scope-expansion/prompt-injection attempt is blocked and logged.
+8. A recorded run replays without re-touching providers and reconstructs the same findings.
 
 ## 7. Vocabulary
 
-Precise terms matter, because the original design blurred them.
-
 | Term | Meaning |
 |---|---|
-| **Harness** | The whole platform: runtime, policy, tools, artifacts, reporting |
-| **Runtime** | The orchestration engine that owns the run lifecycle and state |
-| **Agent** | The reasoning policy: propose-next-action, given state |
-| **Skill** | A declarative objective: required inputs, allowed capabilities, output shape |
-| **Tool** | An atomic, typed, side-effecting action with a declared risk class |
-| **MCP** | A protocol/provider for tools the harness did not write |
+| **Harness** | Runtime, policy, providers, artifacts, memory and reporting |
+| **Runtime / spine** | Deterministic owner of lifecycle, state, budgets and transitions |
+| **Agent / brain** | Local model policy that proposes the next information need |
+| **Skill** | Declarative objective, inputs, allowed capabilities and outputs |
+| **Capability** | Logical operation such as `service.enumerate` independent of provider |
+| **Provider** | Native tool or MCP server that can satisfy one or more capabilities |
+| **Necessity gate** | Decides whether current evidence already satisfies a need and, if not, the minimum provider set |
 | **Artifact** | Immutable raw output, content-addressed and hashed |
-| **Finding** | An interpreted, evidence-bound claim produced from artifacts |
-| **Evidence** | A byte range inside a named artifact, with a hash |
-| **Policy** | The component that converts an action request into allow / ask / deny |
-| **Run** | One investigation: objective + scope + budget + event log |
+| **Evidence** | A span inside a named artifact, with a digest |
+| **Memory** | Cross-run planning context; never valid finding evidence |
+| **Run** | One investigation: objective + scope + budgets + event log |
 
 ## 8. Constraints
 
 - Solo implementer, approximately one semester.
-- All targets local, containerised, and self-owned.
-- Commodity LLM API budget — cost per investigation is a tracked metric, so the
-  design must avoid pathologically large prompts.
+- Local inference must be usable on commodity hardware, so prompts and model calls are budgeted.
+- All security targets are local/self-owned.
+- Network access by providers is explicit and policy-gated.
 - Graded on demonstrable, verifiable behaviour rather than architectural ambition.
 
-That last constraint is why this plan repeatedly prefers *fewer, provable components*
-over a complete conceptual taxonomy.
-
+The final constraint is why v1 deliberately implements a simple, explainable provider-necessity
+gate and defers adaptive token optimization to v2.
