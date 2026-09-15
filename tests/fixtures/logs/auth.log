@@ -1,0 +1,22 @@
+Sep 15 07:58:11 lab-web-01 sshd[2101]: Accepted publickey for deploy from 10.77.0.10 port 40122 ssh2: RSA SHA256:9xK2mZq1Vv0aLpQr7tYu3sBc4dEf5gH6iJk7lMn8oP
+Sep 15 07:58:11 lab-web-01 sshd[2101]: pam_unix(sshd:session): session opened for user deploy by (uid=0)
+Sep 15 08:01:02 lab-web-01 sshd[2211]: Failed password for invalid user admin from 10.77.0.44 port 51234 ssh2
+Sep 15 08:01:03 lab-web-01 sshd[2212]: Failed password for invalid user admin from 10.77.0.44 port 51240 ssh2
+Sep 15 08:01:04 lab-web-01 sshd[2213]: Failed password for invalid user admin from 10.77.0.44 port 51246 ssh2
+Sep 15 08:01:05 lab-web-01 sshd[2214]: Failed password for invalid user root from 10.77.0.44 port 51252 ssh2
+Sep 15 08:01:06 lab-web-01 sshd[2215]: Failed password for invalid user root from 10.77.0.44 port 51258 ssh2
+Sep 15 08:01:07 lab-web-01 sshd[2216]: Failed password for invalid user oracle from 10.77.0.44 port 51264 ssh2
+Sep 15 08:01:08 lab-web-01 sshd[2217]: Failed password for invalid user postgres from 10.77.0.44 port 51270 ssh2
+Sep 15 08:01:09 lab-web-01 sshd[2218]: Failed password for invalid user admin from 10.77.0.44 port 51276 ssh2
+Sep 15 08:01:10 lab-web-01 sshd[2219]: Failed password for invalid user test from 10.77.0.44 port 51282 ssh2
+Sep 15 08:01:11 lab-web-01 sshd[2220]: Failed password for invalid user ubuntu from 10.77.0.44 port 51288 ssh2
+Sep 15 08:01:12 lab-web-01 sshd[2221]: Failed password for invalid user admin from 10.77.0.44 port 51294 ssh2
+Sep 15 08:01:13 lab-web-01 sshd[2222]: Failed password for invalid user support from 10.77.0.44 port 51300 ssh2
+Sep 15 08:01:14 lab-web-01 sshd[2223]: Failed password for invalid user ftpuser from 10.77.0.44 port 51306 ssh2
+Sep 15 08:01:15 lab-web-01 sshd[2224]: Failed password for invalid user admin from 10.77.0.44 port 51312 ssh2
+Sep 15 08:01:16 lab-web-01 sshd[2225]: Failed password for user deploy from 10.77.0.44 port 51318 ssh2
+Sep 15 08:01:17 lab-web-01 sshd[2226]: Failed password for user deploy from 10.77.0.44 port 51324 ssh2
+Sep 15 08:01:31 lab-web-01 sshd[2230]: Accepted password for deploy from 10.77.0.44 port 51330 ssh2
+Sep 15 08:01:31 lab-web-01 sshd[2230]: pam_unix(sshd:session): session opened for user deploy by (uid=0)
+Sep 15 08:12:44 lab-web-01 sshd[2402]: Accepted publickey for deploy from 10.77.0.10 port 40444 ssh2: RSA SHA256:9xK2mZq1Vv0aLpQr7tYu3sBc4dEf5gH6iJk7lMn8oP
+Sep 15 08:20:03 lab-web-01 sudo:   deploy : TTY=pts/0 ; PWD=/opt/app ; USER=root ; COMMAND=/usr/bin/systemctl restart app

@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Runtime output of investigations (local, never committed)
+runs/
+memory/long_term/
+memory/archive/
+eval/results/
+lab/.state/
+*.sqlite
+*.sqlite-journal
+
+# Local keys - the scope signing private key never enters the repo
+*.key
+*.pem
+!tests/fixtures/keys/*.pub

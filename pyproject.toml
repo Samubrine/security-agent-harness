@@ -1,0 +1,43 @@
+[project]
+name = "security-agent-harness"
+version = "0.1.0"
+description = "Local-first agentic security investigation harness (deterministic spine, local model brain)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.9",
+    "typer>=0.12",
+    "rich>=13.7",
+    "lxml>=5.2",
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    "cryptography>=42.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+]
+
+[project.scripts]
+harness = "harness.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -ra"
+markers = [
+    "integration: end-to-end runs that use the scripted model client",
+    "docker: requires a running docker daemon and the local lab",
+]
+
+[tool.uv]
+package = true

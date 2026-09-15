@@ -1,0 +1,85 @@
+{
+  "snapshot_id": "offline-fixture-2026-09",
+  "generated_at": "2026-09-01T00:00:00Z",
+  "source": "offline fixture bundled with the harness test suite",
+  "notes": "Version-range entries only. A missing match is never proof of safety; the matcher may only return entries present in this file.",
+  "entries": [
+    {
+      "cve": "CVE-2023-38408",
+      "vendor": "openbsd",
+      "product": "openssh",
+      "version_start_including": "0.0",
+      "version_end_excluding": "9.3p2",
+      "cvss": 9.8,
+      "severity": "critical",
+      "summary": "The PKCS#11 feature in ssh-agent allows remote code execution when a forwarded agent is reachable.",
+      "cwe": ["CWE-829"]
+    },
+    {
+      "cve": "CVE-2021-41617",
+      "vendor": "openbsd",
+      "product": "openssh",
+      "version_start_including": "6.2",
+      "version_end_excluding": "8.8",
+      "cvss": 7.0,
+      "severity": "high",
+      "summary": "sshd does not correctly initialise supplementary groups for some AuthorizedKeysCommand or AuthorizedPrincipalsCommand configurations, allowing privilege escalation.",
+      "cwe": ["CWE-269"]
+    },
+    {
+      "cve": "CVE-2021-23017",
+      "vendor": "nginx",
+      "product": "nginx",
+      "version_start_including": "0.6.18",
+      "version_end_excluding": "1.20.1",
+      "cvss": 7.7,
+      "severity": "high",
+      "summary": "A one-byte heap overwrite in the DNS resolver can lead to worker process crash or remote code execution.",
+      "cwe": ["CWE-193"]
+    },
+    {
+      "cve": "CVE-2019-20372",
+      "vendor": "nginx",
+      "product": "nginx",
+      "version_start_including": "0.0",
+      "version_end_excluding": "1.17.3",
+      "cvss": 5.3,
+      "severity": "medium",
+      "summary": "Error page handling in the ngx_http_core_module allows request smuggling under specific configurations.",
+      "cwe": ["CWE-444"]
+    },
+    {
+      "cve": "CVE-2020-1938",
+      "vendor": "apache",
+      "product": "tomcat",
+      "version_start_including": "0.0",
+      "version_end_excluding": "9.0.31",
+      "cvss": 9.8,
+      "severity": "critical",
+      "summary": "Ghostcat: the AJP connector exposes file contents and application classes to unauthenticated requests.",
+      "cwe": ["CWE-22"]
+    },
+    {
+      "cve": "CVE-2022-22965",
+      "vendor": "vmware",
+      "product": "spring_framework",
+      "version_start_including": "5.3.0",
+      "version_end_excluding": "5.3.18",
+      "cvss": 9.8,
+      "severity": "critical",
+      "summary": "Spring4Shell: data binding on a Java 9+ Tomcat deployment allows remote code execution.",
+      "cwe": ["CWE-94"]
+    },
+    {
+      "cve": "CVE-2021-41773",
+      "vendor": "apache",
+      "product": "httpd",
+      "version_start_including": "2.4.49",
+      "version_end_excluding": "2.4.50",
+      "cvss": 7.5,
+      "severity": "high",
+      "summary": "Path traversal in Apache HTTP Server 2.4.49 can expose files outside the document root.",
+      "cwe": ["CWE-22"]
+    }
+  ]
+}

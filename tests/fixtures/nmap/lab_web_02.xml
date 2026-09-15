@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sV -oX - -p 443 10.77.0.12" start="1789545700" startstr="Tue Sep 15 08:01:40 2026" version="7.94" xmloutputversion="1.05">
+  <scaninfo type="syn" protocol="tcp" numservices="1000" services="1-65535"/>
+  <verbose level="0"/>
+  <debugging level="0"/>
+  <host starttime="1789545700" endtime="1789545706">
+    <status state="up" reason="echo-reply" reason_ttl="64"/>
+    <address addr="10.77.0.12" addrtype="ipv4"/>
+    <hostnames>
+      <hostname name="lab-web-02" type="user"/>
+    </hostnames>
+    <ports>
+      <port protocol="tcp" portid="443">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="https" product="nginx" version="1.18.0" tunnel="ssl" method="probed" conf="10">
+          <cpe>cpe:/a:nginx:nginx:1.18.0</cpe>
+        </service>
+      </port>
+    </ports>
+    <times srtt="980" rttvar="2210" to="100000"/>
+  </host>
+  <runstats>
+    <finished time="1789545706" timestr="Tue Sep 15 08:01:46 2026" elapsed="6.01" summary="Nmap done; 1 IP address (1 host up) scanned in 6.01 seconds" exit="success"/>
+    <hosts up="1" down="0" total="1"/>
+  </runstats>
+</nmaprun>
