@@ -7,8 +7,61 @@ runtime.
 
 > **The model decides what information it needs. The harness decides whether another tool call is necessary, which provider may satisfy it, and how it is allowed to happen.**
 
-Status: **design phase**. Repo is documentation-first; implementation begins from the vertical
-slice in `docs/design/06-implementation-roadmap.md`.
+Status: **implemented**. The vertical slice runs end to end - local model, typed capability
+proposal, necessity gate, policy, provider, artifact, parser, finding, report and replay - and the
+evaluation harness scores real runs against ground truth. See
+[docs/dev/IMPLEMENTATION.md](docs/dev/IMPLEMENTATION.md) for the map from design to code and
+[docs/dev/AUDIT.md](docs/dev/AUDIT.md) for an independent check of what the implementation actually
+delivers, including what it does not.
+
+```text
+381 tests passing (3.4s)
+port_scan / log_analysis / injection_resistance: every scenario passes its precision, recall,
+hallucination, evidence-binding and scope-compliance targets
+```
+
+## Running it
+
+The default planner is a deterministic local stand-in, so a full investigation runs on a machine
+with no model server, no scanner and no network:
+
+```bash
+make install                 # create .venv and install the package + dev dependencies
+make test                    # the whole suite (381 tests, ~3s, no network)
+make scope                   # generate a signing keypair and sign the lab scope record
+
+# One investigation. Artifacts, events, findings and the report land in runs/<id>/.
+make run SKILL=port_scan OBJECTIVE="Enumerate exposed services on lab-web-01."
+
+# Or drive the CLI directly. The scope record is signed; an unsigned one is refused before
+# the model is ever called.
+.venv/bin/harness run \
+  --skill port_scan \
+  --objective "Enumerate exposed services on lab-web-01." \
+  --target lab-web-01 \
+  --scope ~/.config/security-agent-harness/lab_scope.signed.json
+
+.venv/bin/harness replay runs/<run-id>     # re-derive it offline and verify its integrity
+make eval                                  # run every scenario and print the metrics table
+make doctor                                # report what this machine can and cannot do
+```
+
+To use a real local model instead of the scripted planner, point the harness at any loopback
+endpoint. A non-loopback address is refused unless egress is explicitly enabled, and a remote run is
+labelled as such in its manifest:
+
+```bash
+.venv/bin/harness run --model-backend ollama --model llama3 \
+  --endpoint http://127.0.0.1:11434 --skill port_scan --objective "..." \
+  --scope ~/.config/security-agent-harness/lab_scope.signed.json
+
+.venv/bin/harness run --model-backend openai --model local-model \
+  --endpoint http://127.0.0.1:8080/v1 --skill port_scan --objective "..." \
+  --scope ~/.config/security-agent-harness/lab_scope.signed.json
+```
+
+`nmap` is optional: when the binary is absent the real scanner adapter records a coverage gap rather
+than failing the run, and the deterministic fixture-backed provider answers the same capability.
 
 ## Design docs
 
@@ -49,15 +102,28 @@ slice in `docs/design/06-implementation-roadmap.md`.
    provider necessity gate. A dynamic Token Optimizer is a version-two subsystem, not a v1
    dependency.
 
-## Planned layout
+## Layout
 
 ```text
 MEMORY.md                 bounded active working memory
 memory/BASELINE.md        stable human-curated memory loaded every run
-memory/LONG_TERM.md       durable memory format/index; runtime shards live under memory/long_term/
-docs/design/              design plan
-src/harness/              runtime, policy, providers, memory, tools, parsers, findings, report
-lab/                      docker-compose vulnerable targets + seeded log datasets
-eval/                     ground truth, scenario runner, metrics
-tests/
+memory/long_term/         durable memory shards and the SQLite FTS5 index (local, gitignored)
+docs/design/              the design plan
+docs/dev/                 implementation notes, the interface contract, this project's audit
+src/harness/
+  runtime/                FSM, investigation loop, run assembly, replay and verification
+  llm/                    local-first model clients, prompts, schemas, the scripted planner
+  policy/                 signed scope, capability grants, allow/ask/deny engine, taint tracking
+  providers/              capability registry, necessity gate, router, native and MCP adapters
+  parsers/                deterministic readers for nmap XML, auth logs, access logs, MCP JSON
+  analysers/              rule engine, offline CVE matching, cross-provider correlator
+  findings/               finding construction and the provenance validator
+  memory/                 baseline/active/long-lived memory, compaction, curation
+  context/                tiered context assembly and spotlighting
+  report/                 report rendering from a recorded run directory
+  skills/                 declarative skills (port_scan, log_analysis, entry_point)
+lab/                      docker-compose targets on an internal, egress-free network
+eval/                     scenarios, ground truth, metrics, runner
+scripts/                  scope keypair generation and signing
+tests/                    unit, contract, scenario and end-to-end tests, plus fixtures
 ```
