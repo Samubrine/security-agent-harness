@@ -59,6 +59,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: The snapshot the re-derivation matches versions against. A test fixture, by documented shortcut.
 DEFAULT_SNAPSHOT_PATH = REPO_ROOT / "tests" / "fixtures" / "vuln" / "snapshot_2026-09.json"
 
+#: Where the replay pass writes its verdict. Deliberately NOT ``replay.json``: in a v1 run that file
+#: is the JSONL trace of model and provider interactions, and ``ReplayModelClient.from_path` parses it
+#: with ``read_jsonl``. Writing a JSON object over it destroyed offline replay, so the report gets its
+#: own file and the recorded trace is left alone.
+REPLAY_REPORT = "replay-report.json"
+
 _VOLATILE_FINDING_KEYS = frozenset({"id", "created_at"})
 _VOLATILE_CLAIM_KEYS = frozenset({"id"})
 
@@ -508,37 +514,25 @@ def rederive_findings(run_dir: Path, *, snapshot_path: Path = DEFAULT_SNAPSHOT_P
 
 
 def _read_replay_document(run_dir: Path) -> dict[str, Any]:
-    """Whatever ``replay.json`` already holds, in a form the digest maps can be added to.
+    """The previously written replay report, so a second pass keeps the first's verdicts.
 
-    A v1 run writes ``replay.json`` as JSONL records of the model and provider interactions. Those
-    records are what makes a run offline-replayable, so the digest document keeps them verbatim
-    under ``records`` rather than replacing them: an evaluation step must not destroy the artefact it
-    is measuring. An already-augmented document is returned as it is, which makes the call
-    idempotent.
+    A v1 run writes ``replay.json`` as JSONL records of the model and provider interactions, and
+    ``ReplayModelClient.from_path` parses that file with ``read_jsonl`` to make a run
+    offline-replayable. Writing the digest document into it replaced those records with a JSON
+    object and broke offline replay outright:
+
+        harness run --model-backend replay --endpoint <run>/replay.json
+        JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2
+
+    An evaluation step must not destroy the artefact it measures, and preserving the records under a
+    ``records`` key does not help the consumer that reads the file line by line. So the report lives
+    in its own file and ``replay.json`` is never touched.
     """
-    path = run_dir / "replay.json"
+    path = run_dir / REPLAY_REPORT
     if not path.is_file():
         return {}
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return {}
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        value = None
-    if isinstance(value, dict):
-        return value
-    records: list[Any] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            records.append({"_unparsed": line[:2000]})
-    return {"records": records} if records else {}
+    value = _read_json(path)
+    return value if isinstance(value, dict) else {}
 
 
 def augment_replay_json(run_dir: Path, *, snapshot_path: Path = DEFAULT_SNAPSHOT_PATH) -> ReplayPass:
@@ -558,5 +552,5 @@ def augment_replay_json(run_dir: Path, *, snapshot_path: Path = DEFAULT_SNAPSHOT
         document.pop("finding_digests", None)
         document.pop("replayed_finding_digests", None)
     document["replay_pass"] = pass_.as_dict()
-    atomic_write_json(run_dir / "replay.json", document)
+    atomic_write_json(run_dir / REPLAY_REPORT, document)
     return pass_

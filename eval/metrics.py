@@ -55,6 +55,11 @@ METRIC_NAMES: tuple[str, ...] = (
     "necessity_precision",
     "multi_provider_expansion_rate",
     "replay_fidelity",
+    # The three memory metrics design 07 section 2 asks for and nothing computed. Copied onto the
+    # end rather than inserted so no existing scenario's metric order changes.
+    "memory_persistence",
+    "memory_evidence_isolation",
+    "memory_retrieval_cost",
 )
 
 
@@ -302,10 +307,17 @@ def load_run_bundle(run_dir: Path) -> RunBundle:
             bundle.scope = run_json["scope"]
             bundle.sources["scope"] = "run.json#scope"
 
-    replay = _read_json(run_dir / "replay.json")
+    # The replay pass reports from its own file, because replay.json is the JSONL model/provider
+    # trace that ReplayModelClient reads and overwriting it broke offline replay. The replay.json
+    # fallback is for a directory the earlier in-place version already augmented.
+    replay = _read_json(run_dir / "replay-report.json")
+    source = "replay-report.json"
+    if not isinstance(replay, dict):
+        replay = _read_json(run_dir / "replay.json")
+        source = "replay.json"
     if isinstance(replay, dict):
         bundle.replay = replay
-        bundle.sources["replay"] = "replay.json"
+        bundle.sources["replay"] = source
 
     for name in ("report.json", "run.json"):
         summary = _read_json(run_dir / name)
@@ -1159,6 +1171,159 @@ def replay_fidelity(bundle: RunBundle, truth: GroundTruth | None = None) -> Metr
 # ----------------------------------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------------------------------
+# Memory metrics (design 07 section 2)
+#
+# These three were the honest gap in the v1 audit: the plan asks for them as measured numbers,
+# nothing computed them, and the properties behind them were covered only by unit tests. Each
+# returns not_measured when its input is absent, because "this run did not exercise memory" and
+# "this run exercised memory badly" are different facts and only the second is a finding.
+# ----------------------------------------------------------------------------------------------
+
+
+#: A claim may cite a memory entry as context but never as support. The prefix convention the
+#: finding validator uses, restated here so the measurement does not depend on that module.
+_MEMORY_REF_PREFIXES = ("mem-", "memory:")
+
+
+def _run_id(bundle: RunBundle) -> str | None:
+    record = bundle.summary or {}
+    value = record.get("run_id")
+    return value if isinstance(value, str) and value else None
+
+
+def _event_rows(bundle: RunBundle) -> list[dict[str, Any]] | None:
+    return _read_jsonl(bundle.run_dir / "events.jsonl")
+
+
+def _events_of(rows: Sequence[Mapping[str, Any]], event_type: str) -> list[Mapping[str, Any]]:
+    return [row for row in rows if row.get("type") == event_type]
+
+
+def _claim_refs(finding: Mapping[str, Any]) -> list[str]:
+    """Every observation id a finding's claims cite, from either support or contradiction."""
+    refs: list[str] = []
+    for claim in finding.get("claims") or ():
+        if not isinstance(claim, Mapping):
+            continue
+        for key in ("supports", "contradicts"):
+            for ref in claim.get(key) or ():
+                if isinstance(ref, str):
+                    refs.append(ref)
+    return refs
+
+
+def memory_evidence_isolation(bundle: RunBundle, truth: GroundTruth | None = None) -> Metric:
+    """Share of findings whose claims cite no memory entry anywhere.
+
+    Always 1.0 in a correct run, which is why it is a target and not a report: memory is advisory
+    context and the design says there is no path from a memory entry into a finding. A value below
+    1.0 means such a reference reached a claim, and that is the one property the provenance design
+    exists to guarantee.
+    """
+    name = "memory_evidence_isolation"
+    if bundle.findings is None:
+        return not_measured(name, "findings.json was not recorded, so no claim could be inspected")
+    if not bundle.findings:
+        return not_measured(name, "the run recorded no findings, so isolation was not exercised")
+    offenders: dict[str, list[str]] = {}
+    for index, finding in enumerate(bundle.findings):
+        cited = sorted({r for r in _claim_refs(finding) if r.startswith(_MEMORY_REF_PREFIXES)})
+        if cited:
+            offenders[_finding_id(finding, index)] = cited
+    total = len(bundle.findings)
+    return measured(
+        name,
+        (total - len(offenders)) / total,
+        inputs={"findings": total, "offending": offenders},
+        detail="value is the share of findings whose claims cite no memory entry as support",
+    )
+
+
+def memory_persistence(bundle: RunBundle, truth: GroundTruth | None = None) -> Metric:
+    """Share of promoted long-lived entries that attribute the run they came from.
+
+    The design's rule is that every promoted entry lists its source run, so a learned fact can
+    always be traced back to the investigation that produced it. A promotion that names no run is
+    unattributable, and a promotion naming a *different* run is worse than unattributed - it is a
+    durable claim about an investigation that did not produce it.
+    """
+    name = "memory_persistence"
+    rows = _event_rows(bundle)
+    if rows is None:
+        return not_measured(name, "events.jsonl was not recorded, so curation cannot be seen")
+    writes = _events_of(rows, "LONG_TERM_MEMORY_WRITTEN")
+    if not writes:
+        return not_measured(
+            name, "this run promoted nothing to long-lived memory, so persistence was not exercised"
+        )
+    run_id = _run_id(bundle)
+    attributed: dict[str, str] = {}
+    unattributed: list[str] = []
+    for event in writes:
+        data = event.get("data") or {}
+        entry = str(data.get("entry") or "")
+        source = data.get("run")
+        if isinstance(source, str) and source:
+            if run_id is None or source == run_id:
+                attributed[entry] = source
+            else:
+                unattributed.append(f"{entry} cites run {source!r}, not {run_id!r}")
+        else:
+            unattributed.append(entry or "<unnamed entry>")
+    total = len(writes)
+    return measured(
+        name,
+        (total - len(unattributed)) / total,
+        inputs={
+            "promoted": total,
+            "attributed": sorted(attributed),
+            "unattributed": sorted(unattributed),
+            "run_id": run_id,
+        },
+        detail="value is the share of promoted entries naming this run as their source",
+    )
+
+
+def memory_retrieval_cost(bundle: RunBundle, truth: GroundTruth | None = None) -> Metric:
+    """What memory cost this run, in tokens when the run measured it and in entries when it did not.
+
+    Reported rather than targeted: a run that retrieved more memory is not worse, it is differently
+    shaped, and a threshold here would push a future optimizer toward retrieving less rather than
+    toward retrieving better. Older runs recorded only MEMORY_RETRIEVED, which is why the unit is
+    named in the inputs instead of being assumed.
+    """
+    name = "memory_retrieval_cost"
+    rows = _event_rows(bundle)
+    if rows is None:
+        return not_measured(name, "events.jsonl was not recorded, so retrieval cannot be seen")
+    retrieved = _events_of(rows, "MEMORY_RETRIEVED")
+    assembled = _events_of(rows, "CONTEXT_ASSEMBLED")
+    if not retrieved and not assembled:
+        return not_measured(
+            name, "neither MEMORY_RETRIEVED nor CONTEXT_ASSEMBLED was recorded for this run"
+        )
+    entries = sum(len((event.get("data") or {}).get("entries") or []) for event in retrieved)
+    tokens = sum(
+        int(((event.get("data") or {}).get("memory") or {}).get("total_tokens") or 0)
+        for event in assembled
+    )
+    unit = "tokens" if assembled else "entries"
+    return measured(
+        name,
+        float(tokens if assembled else entries),
+        inputs={
+            "unit": unit,
+            "memory_tokens": tokens,
+            "retrieved_entries": entries,
+            "turns_measured": len(assembled),
+        },
+        detail=(
+            "tokens spent on memory context, or the number of retrieved entries when the run "
+            "did not measure tokens"
+        ),
+    )
+
 _METRIC_FUNCTIONS: dict[str, Any] = {
     "finding_precision": finding_precision,
     "finding_recall": finding_recall,
@@ -1170,6 +1335,9 @@ _METRIC_FUNCTIONS: dict[str, Any] = {
     "necessity_precision": necessity_precision,
     "multi_provider_expansion_rate": multi_provider_expansion_rate,
     "replay_fidelity": replay_fidelity,
+    "memory_persistence": memory_persistence,
+    "memory_evidence_isolation": memory_evidence_isolation,
+    "memory_retrieval_cost": memory_retrieval_cost,
 }
 
 assert tuple(_METRIC_FUNCTIONS) == METRIC_NAMES, "METRIC_NAMES and the dispatch table must agree"

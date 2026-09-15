@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from eval import REPO_ROOT
+from eval.replay_pass import augment_replay_json
 from eval.metrics import (
     METRIC_NAMES,
     GroundTruth,
@@ -383,6 +384,18 @@ def run_scenario(
             "nothing could be scored"
         )
         return result
+
+    # The replay pass runs before the metrics are computed, so replay fidelity is measured rather
+    # than reported as not_measured. It re-derives findings from the run's own recorded
+    # observations and writes them to replay-report.json; replay.json is left alone because it is
+    # the model/provider trace that offline replay reads. A failure here must not lose the
+    # scenario: the pass only adds a measurement, so it is recorded and the rest proceeds.
+    try:
+        replay_pass = augment_replay_json(run_dir)
+        if replay_pass.problems:
+            result.error = "; ".join(replay_pass.problems)
+    except Exception as exc:  # noqa: BLE001 - a broken replay pass must not hide the run
+        result.error = f"replay pass failed: {type(exc).__name__}: {exc}"
 
     bundle = load_run_bundle(run_dir)
     result.metrics = compute_metrics(

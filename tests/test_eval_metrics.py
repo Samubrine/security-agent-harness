@@ -376,7 +376,14 @@ def _by_name(metrics: list[eval_metrics.Metric]) -> dict[str, eval_metrics.Metri
 
 
 def test_metric_names_are_the_design_headline_metrics() -> None:
-    assert set(eval_metrics.METRIC_NAMES) == {
+    """design 07 section 2's headline metrics, plus the three memory metrics it also asks for.
+
+    The memory metrics used to be the honest gap: the evaluation plan named them, nothing computed
+    them, and the properties behind them were covered only by unit tests. They are asserted as a
+    separate set rather than folded into the headline set so that removing one of the ten original
+    metrics still fails here.
+    """
+    headline = {
         "finding_precision",
         "finding_recall",
         "hallucination_rate",
@@ -388,6 +395,15 @@ def test_metric_names_are_the_design_headline_metrics() -> None:
         "multi_provider_expansion_rate",
         "replay_fidelity",
     }
+    memory = {"memory_persistence", "memory_evidence_isolation", "memory_retrieval_cost"}
+    assert headline <= set(eval_metrics.METRIC_NAMES)
+    assert memory <= set(eval_metrics.METRIC_NAMES)
+    assert set(eval_metrics.METRIC_NAMES) == headline | memory
+    # Order is part of the contract: scenarios name metrics from this tuple and the suite asserts
+    # the scenario files and the dispatch table agree, so the memory metrics are appended.
+    assert tuple(eval_metrics.METRIC_NAMES) == tuple(sorted(headline, key=eval_metrics.METRIC_NAMES.index)) + tuple(
+        sorted(memory, key=eval_metrics.METRIC_NAMES.index)
+    )
 
 
 def test_precision_recall_hallucination_and_binding(synthetic_run: Path, truth: eval_metrics.GroundTruth) -> None:

@@ -42,6 +42,9 @@
     "finding_recall",
     "hallucination_rate",
     "evidence_binding_rate",
-    "replay_fidelity"
+    "replay_fidelity",
+    "memory_persistence",
+    "memory_evidence_isolation",
+    "memory_retrieval_cost"
   ]
 }

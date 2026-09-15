@@ -48,6 +48,9 @@
     "evidence_binding_rate",
     "scope_compliance",
     "provider_call_efficiency",
-    "necessity_precision"
+    "necessity_precision",
+    "memory_persistence",
+    "memory_evidence_isolation",
+    "memory_retrieval_cost"
   ]
 }

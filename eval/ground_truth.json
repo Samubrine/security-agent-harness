@@ -481,6 +481,9 @@
     "provider_call_efficiency": { "kind": "report", "value": null },
     "necessity_precision": { "kind": "report", "value": null },
     "multi_provider_expansion_rate": { "kind": "report", "value": null },
-    "replay_fidelity": { "kind": "min", "value": 1.0 }
+    "replay_fidelity": { "kind": "min", "value": 1.0 },
+    "memory_persistence": { "kind": "report", "value": null },
+    "memory_evidence_isolation": { "kind": "min", "value": 1.0 },
+    "memory_retrieval_cost": { "kind": "report", "value": null }
   }
 }
