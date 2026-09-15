@@ -15,6 +15,7 @@ this project has to a confession. Three consequences shape the parser:
 from __future__ import annotations
 
 import re
+import urllib.parse
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Callable
@@ -51,9 +52,15 @@ _SENSITIVE = re.compile(
 )
 _SCANNER_AGENTS = re.compile(
     r"(sqlmap|nikto|nmap|masscan|gobuster|dirbuster|wfuzz|hydra|nuclei|acunetix|nessus|"
-    r"zgrab|python-requests|libwww-perl|curl/|wpscan)",
+    r"zgrab|libwww-perl|wpscan)",
     re.IGNORECASE,
 )
+
+#: Reasons that describe the *shape of the request* rather than the client's self-description. Only
+#: these can make a successful response meaningful: a recognised scanner fetching / is not a probe
+#: that worked, but a 200 for ../../etc/passwd is a request worth escalating. Keeping the two
+#: classes apart is what stops the report from calling ordinary curl traffic a success.
+STRUCTURAL_REASONS = frozenset({"path_traversal", "injection_syntax", "null_byte", "sensitive_path"})
 
 _TIME = re.compile(r"(?P<day>\d{2})/(?P<mon>[A-Za-z]{3})/(?P<year>\d{4}):(?P<time>\d{2}:\d{2}:\d{2})"
                    r" (?P<offset>[+-]\d{4})")
@@ -118,6 +125,7 @@ def parse_nginx_access(
                     "timestamp": request.timestamp.isoformat() if request.timestamp else "",
                     "suspicious": request.suspicious,
                     "reasons": list(request.reasons),
+                    "probe_shaped": bool(set(request.reasons) & STRUCTURAL_REASONS),
                     "user_agent": request.agent,
                 },
                 byte_start=request.byte_start,
@@ -204,19 +212,32 @@ def _reasons(path: str, agent: str) -> list[str]:
 
     Reasons accumulate rather than short-circuit: a request that is both a traversal and a scanner
     probe should be citable as both, because the report's job is to show its work.
+
+    Matching runs against the percent-decoded path as well as the raw one. Attackers encode
+    precisely to defeat naive string matching, and a detector that only reads the raw request line
+    would miss the most common form of every injection payload.
     """
+    decoded = _decode(path)
     reasons: list[str] = []
-    if _TRAVERSAL.search(path):
+    if _TRAVERSAL.search(path) or _TRAVERSAL.search(decoded):
         reasons.append("path_traversal")
-    if _INJECTION.search(path):
+    if _INJECTION.search(path) or _INJECTION.search(decoded):
         reasons.append("injection_syntax")
-    if _NULL_BYTE.search(path):
+    if _NULL_BYTE.search(path) or _NULL_BYTE.search(decoded):
         reasons.append("null_byte")
-    if _SENSITIVE.search(path):
+    if _SENSITIVE.search(path) or _SENSITIVE.search(decoded):
         reasons.append("sensitive_path")
     if _SCANNER_AGENTS.search(agent):
         reasons.append("scanner_user_agent")
     return reasons
+
+
+def _decode(path: str) -> str:
+    """Percent-decode for matching only. The raw path is what the evidence span points at."""
+    try:
+        return urllib.parse.unquote(path, errors="replace")
+    except Exception:  # noqa: BLE001 - a path that cannot be decoded simply matches nothing
+        return ""
 
 
 def _summarise(requests: list[_Request], host: str) -> dict[str, Any]:
@@ -242,7 +263,9 @@ def _summarise(requests: list[_Request], host: str) -> dict[str, Any]:
         # Whether the probes appear to have worked. Recorded, not concluded: a 403 is a refusal and
         # a 200 for a traversal path is the only combination that would raise status above possible.
         "successful_suspicious": [
-            {"path": r.path, "status": r.status} for r in suspicious if r.status < 400
+            {"path": r.path, "status": r.status, "reasons": list(r.reasons)}
+            for r in suspicious
+            if r.status < 400 and set(r.reasons) & STRUCTURAL_REASONS
         ],
     }
 

@@ -58,6 +58,9 @@ class NmapProvider:
             requires_network_egress=True,
             timeout_s=300,
             idempotent=True,
+            # A live service-detection scan of a host costs seconds, not milliseconds, and the gate
+            # ranks by that estimate rather than by which provider was registered first.
+            estimated_cost={"latency_ms": 30_000, "token_payload_hint": 2000},
             description="Service and version detection against an authorised target.",
         )
 

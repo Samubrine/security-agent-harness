@@ -53,6 +53,10 @@ class SyntheticProvider:
             requires_network_egress=False,
             timeout_s=10,
             idempotent=True,
+            # Declared cheap on purpose. The necessity gate orders equivalent providers by estimated
+            # cost, and a fixture-backed read really is cheaper than a live scan -- so an offline run
+            # selects this one and leaves the real scanner as the second source it can expand to.
+            estimated_cost={"latency_ms": 5, "token_payload_hint": 2000},
             description=(
                 "Deterministic replay of a recorded scan; used for tests, evaluation and as a "
                 "risk-free corroborating provider."
