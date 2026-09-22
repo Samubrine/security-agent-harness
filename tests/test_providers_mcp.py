@@ -239,7 +239,13 @@ def test_client_completes_a_handshake_with_a_real_subprocess() -> None:
 # -- the untrusted boundary: a server can send anything --------------------------------
 
 
-def _parse(raw: dict[str, Any], *, target: str | None = None, tmp_path: Path | None = None):
+def _parse(
+    raw: dict[str, Any],
+    *,
+    target: str | None = None,
+    tmp_path: Path | None = None,
+    raw_override: bytes | None = None,
+):
     """Feed one MCP envelope through the parser the way the runtime does.
 
     A real artifact store stands behind it because the parser refuses to run without provenance:
@@ -253,7 +259,9 @@ def _parse(raw: dict[str, Any], *, target: str | None = None, tmp_path: Path | N
     from harness.parsers.mcp_json import parse_mcp_json
     from harness.util import utcnow
 
-    payload = json.dumps(raw).encode("utf-8")
+    # `raw_override` exists for payloads a Python literal cannot express: an integer with more digits
+    # than the interpreter will convert is exactly that.
+    payload = raw_override if raw_override is not None else json.dumps(raw).encode("utf-8")
     store = ArtifactStore((tmp_path or Path(tempfile.mkdtemp())) / "run", "run-mcp")
     meta = store.put(payload, media_type=MEDIA_TYPE, producer="mcp:scanner-a")
     now = utcnow()
@@ -409,3 +417,50 @@ def test_a_tool_refuses_an_argument_it_never_declared(tmp_path: Path) -> None:
         ProviderRequest.build(grant=grant(), capability="service.enumerate", run_id="run-mcp", args={})
     )
     assert allowed.exit_status == "completed"
+
+
+def test_a_cvss_too_large_to_be_a_float_is_a_gap_not_an_exception() -> None:
+    """A JSON integer has no size limit, and `float()` on a huge one raises OverflowError.
+
+    The parser's contract is that no payload can raise: a remote server sending this would otherwise
+    have its whole reply - including the observations that were fine - discarded as a provider
+    failure (R2-19's rule, and the module docstring's claim).
+    """
+    parsed = _parse(
+        _envelope(
+            observations=[
+                {"kind": "service", "value": {"cvss": 10**400, "product": "nginx"}},
+                {"kind": "service", "value": {"product": "openssh", "version": "8.2p1"}},
+            ]
+        )
+    )
+    assert [obs.value["product"] for obs in parsed.observations] == ["openssh"]
+    assert len(parsed.gaps) == 1
+    assert parsed.gaps[0].scope["index"] == 0
+
+
+def test_a_number_too_long_to_convert_is_a_gap_and_does_not_take_its_siblings_with_it() -> None:
+    """`json.loads` refuses a 4300-digit literal and Python refuses to render one, both as bare errors.
+
+    Either would escape a function whose contract is that no payload raises, and the `float()` the
+    range check used to do raised `OverflowError` on a merely large integer. The conversion is bounded
+    per number instead, so the value is rejected by name and the observations beside it survive.
+    """
+    huge = b"9" * 4400
+    parsed = _parse(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "observations": [
+                    {"kind": "service", "value": {"cvss": int("9" * 200), "product": "big"}},
+                ]
+            },
+        },
+        raw_override=b'{"jsonrpc":"2.0","id":1,"result":{"observations":['
+        b'{"kind":"service","value":{"cvss":' + huge + b'}},'
+        b'{"kind":"service","value":{"product":"nginx","version":"1.18.0"}}]}}',
+    )
+    assert [obs.value.get("product") for obs in parsed.observations] == ["nginx"]
+    assert len(parsed.gaps) == 1
+    assert "cvss is a number too long to convert" in parsed.gaps[0].impact

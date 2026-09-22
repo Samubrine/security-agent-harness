@@ -153,6 +153,12 @@ def test_the_denial_is_recorded_in_the_run(tmp_path: Path, lab_environment, monk
         ("0", None),
         ("70000", None),
         ("80,,443", None),
+        # `str.isdigit()` is true for these and `int()` reads the second as 80: a specification two
+        # readers can disagree about is the one thing this parser must not produce.
+        ("\u00b2", None),
+        ("\uff18\uff10", None),
+        ("-80", None),
+        ("+80", None),
     ],
 )
 def test_the_port_grammar_is_the_one_operators_write(spec: str, expected) -> None:
@@ -327,3 +333,137 @@ def test_an_argument_of_the_wrong_type_is_denied(tmp_path: Path) -> None:
     denial = _decide(book, {"profile": 7})
     assert denial.verdict == "deny"
     assert REASON_ARGUMENTS_INVALID in denial.reasons
+
+
+def test_a_provider_that_takes_no_ports_is_not_bounded_by_a_port_window(tmp_path: Path) -> None:
+    """The window is enforced on the argument that carries it (D26).
+
+    The offline matcher and the log reader have no `ports` argument, so a window cannot constrain
+    them - and refusing their calls would stop evidence the scope authorises.
+    """
+    from harness.providers.base import ProviderRequest
+
+    book, _ = _book(tmp_path, _scope(ports=[80]))
+    grant = book.grants[0]
+    cve_grant = grant.model_copy(update={"capabilities": [*grant.capabilities, "vulnerability.match"]})
+    from harness.policy.grants import GrantBook
+
+    engine = PolicyEngine(GrantBook([cve_grant]))
+    from harness.runtime.analysers import CveMatcherProvider
+
+    matcher = CveMatcherProvider(snapshot=None, observations=lambda: [])  # type: ignore[arg-type]
+    decision = engine.decide(
+        provider=matcher.spec, capability="vulnerability.match", grant_id=cve_grant.id, args={}, taint="T1"
+    )
+    assert decision.verdict == "allow", decision.reasons
+    assert REASON_PORTS_NOT_GRANTED not in decision.reasons
+
+    # The companion: a provider that does take ports is bounded.
+    denial = engine.decide(
+        provider=NmapProvider().spec,
+        capability="service.enumerate",
+        grant_id=cve_grant.id,
+        args={"ports": "1-65535"},
+        taint="T1",
+    )
+    assert denial.verdict == "deny"
+    assert REASON_PORTS_NOT_GRANTED in denial.reasons
+
+
+def test_the_narrowest_statement_wins_when_two_networks_authorise_a_host() -> None:
+    """A window stated on the second network covering a host used to be dropped silently."""
+    from harness.policy.grants import mint_from_scope
+
+    now = utcnow()
+    scope = ScopeFile(
+        scope_id="lab-overlap",
+        authorized_by="pytest",
+        networks=[
+            ScopeNetwork(cidr="10.77.0.0/24", include=["10.77.0.11"]),
+            ScopeNetwork(cidr="10.77.0.0/16", include=["10.77.0.11"], ports=[80, 443]),
+        ],
+        aliases={"lab-web-01": "net:10.77.0.11"},
+        window=ScopeWindow(**{"from": now - timedelta(minutes=5), "to": now + timedelta(hours=1)}),
+        payload_version=PAYLOAD_VERSION,
+    )
+    book = mint_from_scope(scope, run_id="run-overlap")
+    assert book.grants[0].ports == [80, 443]
+
+    disjoint = scope.model_copy(deep=True)
+    disjoint.networks[0].ports = [8080]
+    from harness.errors import ScopeError
+
+    with pytest.raises(ScopeError) as refusal:
+        mint_from_scope(disjoint, run_id="run-disjoint")
+    assert "do not overlap" in str(refusal.value)
+
+
+def test_a_windowed_scope_still_produces_evidence(lab_environment, tmp_path: Path) -> None:
+    """The end-to-end case a review found broken: the catalogue offered `ports` to providers that
+    refuse it, so a windowed run executed nothing and still said it had completed.
+
+    What has to hold: the capable provider is offered the window (and honours it), the matcher - which
+    takes no arguments - is still callable, and the run produces both kinds of evidence.
+    """
+    scope = _scope(ports=[80])
+    private, public = tmp_path / "k.pem", tmp_path / "k.pub"
+    generate_keypair(private, public)
+    path = tmp_path / "scope.json"
+    atomic_write_json(path, sign_scope(scope, private).model_dump(mode="json"))
+
+    artifacts = execute_run(
+        lab_environment.request(
+            objective="Enumerate exposed services on lab-web-01.",
+            skill="port_scan",
+            target_alias="lab-web-01",
+            run_id="run-authority-window",
+            scope_path=path,
+            public_key_path=public,
+        )
+    )
+
+    observations = json.loads((artifacts.run_dir / "observations.json").read_text(encoding="utf-8"))
+    kinds = {row["kind"] for row in observations}
+    assert artifacts.summary.provider_calls > 0, artifacts.stop_reason
+    assert "service" in kinds, sorted(kinds)
+    # The synthetic provider filtered its recorded scan to the window: no service on a port the scope
+    # never authorised entered the run.
+    assert {row["value"].get("port") for row in observations if row["kind"] == "service"} == {80}
+    assert "vulnerability_match" in kinds, "the matcher, which takes no arguments, still ran"
+    assert not any(
+        REASON_PORTS_NOT_GRANTED in row.get("reasons", []) for row in read_jsonl(artifacts.run_dir / "policy-decisions.jsonl")
+    ), "the run had to propose within the window, so nothing should have been denied for it"
+
+
+def test_a_record_that_declares_a_newer_payload_version_is_refused(tmp_path: Path) -> None:
+    """Verifying a shape this build does not know would be a guess dressed as a verification."""
+    from harness.models import ScopeFile as Model
+
+    scope = _scope()
+    broken = scope.model_copy(update={"payload_version": 99})
+    with pytest.raises(ValueError) as refusal:
+        Model.model_validate(broken.model_dump(mode="json"))
+    assert "does not verify" in str(refusal.value)
+
+
+def test_a_future_field_does_not_unverify_a_record_signed_before_it(monkeypatch) -> None:
+    """The strip list is keyed by the version that introduced each field, not held as one list.
+
+    Held as one list, a v3 field would strip `payload_version` from a v2 record too - turning a
+    correctly signed record into an unverifiable one, which is the failure the mechanism exists to
+    prevent (and the frozen run's key no longer exists to re-sign anything).
+    """
+    import harness.models as models
+
+    monkeypatch.setattr(models, "PAYLOAD_VERSION", 3)
+    monkeypatch.setitem(models._PAYLOAD_FIELDS_BY_VERSION, 3, ("notes_v3",))
+    v2 = _scope(ports=[80])
+    payload = v2.model_copy(update={"payload_version": 2}).signing_payload()
+
+    assert "payload_version" in payload, "a v2 record keeps the field v2 introduced"
+    assert payload["payload_version"] == 2
+    assert "ports" in payload["networks"][0]
+
+    v1 = _scope().model_copy(update={"payload_version": 1}).signing_payload()
+    assert "payload_version" not in v1
+    assert "ports" not in v1["networks"][0]

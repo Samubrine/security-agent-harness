@@ -33,6 +33,9 @@ MAX_BYTES = 8 * 1024 * 1024
 
 _INPUT_SCHEMA = {
     "type": "object",
+    # One spelling for the path, and the schema is exactly what the adapter accepts: it used to
+    # accept `file` as a legacy fallback while declaring only `path`, so the argument check that
+    # reads this declaration would have denied a call the adapter would have served (R2-07).
     "properties": {"path": {"type": "string"}},
     "required": ["path"],
     "additionalProperties": False,
@@ -80,7 +83,7 @@ class LogFileProvider:
                 kind="permission_denied",
                 exit_status="denied",
             )
-        raw_name = request.args.get("path") or request.args.get("file")
+        raw_name = request.args.get("path")
         if not isinstance(raw_name, str) or not raw_name.strip():
             return failed_result(
                 request=request,

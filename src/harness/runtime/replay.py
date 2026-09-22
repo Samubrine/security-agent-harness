@@ -124,22 +124,38 @@ class Replayer:
     def _load_records(self) -> None:
         """Read the record files off disk. A row that will not reconstruct is reported, not raised.
 
-        Called from the constructor and again from :meth:`verify`, because verification has to
-        describe the bytes that are on disk now: a caller that edits ``observations.jsonl`` between
-        the two must not be held to an in-memory copy of the file it replaced.
+        Called from the constructor and again from :meth:`verify`, because verification has to describe
+        the bytes that are on disk now: a caller that edits ``observations.jsonl`` between the two must
+        not be held to an in-memory copy of the file it replaced.
+
+        Both copies of the observation set are read and reconciled *separately*. The runtime writes the
+        same records as a JSONL working form and as a JSON array, and the evaluation harness scores the
+        array - so a check that read one of them would pass while the file a metric is computed from
+        said something else (R2-31). The one the runtime wrote (``observations.jsonl``) is what the
+        accessors return; the other is checked against the chain like a record file in its own right.
         """
         self._observations = {}
         self._recorded_observation_ids = set()
-        for row in read_jsonl(self.run_dir / "observations.jsonl"):
-            row_id = row.get("id") if isinstance(row, dict) else None
-            if isinstance(row_id, str):
-                self._recorded_observation_ids.add(row_id)
-            try:
-                observation = Observation.model_validate(row)
-            except Exception as exc:  # noqa: BLE001 - the row is the problem, not the reader
-                self.problems.append(f"unreadable observation {row_id}: {exc}")
+        self._recorded_observation_digests: dict[str, str] = {}
+        self._observation_files: list[tuple[str, list[dict[str, Any]]]] = []
+        for name in ("observations.jsonl", "observations.json"):
+            rows = self._rows_of(name)
+            if rows is None:
                 continue
-            self._observations[observation.id] = observation
+            self._observation_files.append((name, rows))
+            for row in rows:
+                row_id = row.get("id") if isinstance(row, dict) else None
+                if isinstance(row_id, str):
+                    self._recorded_observation_ids.add(row_id)
+                    self._recorded_observation_digests[row_id] = sha256_text(canonical_json(row))
+                try:
+                    observation = Observation.model_validate(row)
+                except Exception as exc:  # noqa: BLE001 - the row is the problem, not the reader
+                    self.problems.append(f"unreadable observation {row_id} in {name}: {exc}")
+                    continue
+                # The JSONL form wins when both are present: it is what the runtime wrote while the run
+                # was happening, and the checks below compare each file against the chain anyway.
+                self._observations.setdefault(observation.id, observation)
         self._findings = []
         findings_path = self.run_dir / "findings.json"
         if findings_path.exists():
@@ -149,6 +165,44 @@ class Replayer:
                 except Exception as exc:  # noqa: BLE001
                     row_id = row.get("id") if isinstance(row, dict) else None
                     self.problems.append(f"unreadable finding {row_id}: {exc}")
+
+    def _rows_of(self, name: str) -> list[dict[str, Any]] | None:
+        """The record rows in one file, or ``None`` when the file is not there.
+
+        A file that exists but does not hold a list of records is reported here rather than being read
+        as an empty set: "no observations" and "an unreadable observations file" are different facts.
+        """
+        path = self.run_dir / name
+        if not path.exists():
+            return None
+        if name.endswith(".jsonl"):
+            rows = read_jsonl(path)
+        else:
+            value = read_json(path)
+            if isinstance(value, dict):
+                value = value.get("observations") or value.get("findings") or value.get("items")
+            rows = value
+        if not isinstance(rows, list):
+            self.problems.append(f"{name} is not a list of records")
+            return []
+        return [row for row in rows if isinstance(row, dict)]
+
+    def _observation_rows(self) -> list[dict[str, Any]]:
+        """Every recorded observation, from the working form and from the array form.
+
+        The runtime writes both, and the evaluation harness scores the *array*: a check that read only
+        ``observations.jsonl`` would pass while the file a metric is computed from said something else
+        (R2-31).
+        """
+        rows = [row for row in read_jsonl(self.run_dir / "observations.jsonl") if isinstance(row, dict)]
+        array_path = self.run_dir / "observations.json"
+        if array_path.exists():
+            extra = read_json(array_path)
+            if isinstance(extra, list):
+                rows.extend(row for row in extra if isinstance(row, dict))
+            else:
+                self.problems.append("observations.json is not a list of records")
+        return rows
 
     # -- accessors -------------------------------------------------------------------------
 
@@ -254,28 +308,40 @@ class Replayer:
 
     def _reconcile_observations(self, segment: Sequence[dict[str, Any]]) -> None:
         witnessed = _witnessed(segment, "OBSERVATION_ADDED", "observation")
-        for observation in sorted(self._observations.values(), key=lambda o: o.id):
-            data = witnessed.get(observation.id)
-            if data is None:
-                self.problems.append(
-                    f"observations.jsonl records {observation.id}, which no OBSERVATION_ADDED event "
-                    f"in the final run segment witnesses"
+        for name, rows in self._observation_files:
+            seen: set[str] = set()
+            for row in rows:
+                row_id = str(row.get("id") or "")
+                if not row_id:
+                    continue
+                seen.add(row_id)
+                data = witnessed.get(row_id)
+                if data is None:
+                    self.problems.append(
+                        f"{name} records {row_id}, which no OBSERVATION_ADDED event in the final run "
+                        f"segment witnesses"
+                    )
+                    continue
+                self._mismatch("observation", row_id, "kind", row.get("kind"), data.get("kind"))
+                self._mismatch("observation", row_id, "provider", row.get("provider"), data.get("provider"))
+                evidence = row.get("evidence")
+                artifacts = [
+                    str(entry.get("artifact"))
+                    for entry in evidence
+                    if isinstance(entry, dict) and entry.get("artifact")
+                ] if isinstance(evidence, list) else []
+                self._mismatch("observation", row_id, "evidence", sorted(artifacts), sorted(_string_list(data.get("evidence"))))
+                self._reconcile_record_digest(
+                    "observation",
+                    row_id,
+                    data,
+                    {row_id: sha256_text(canonical_json(row))},
+                    source=name,
                 )
-                continue
-            self._mismatch("observation", observation.id, "kind", observation.kind, data.get("kind"))
-            self._mismatch("observation", observation.id, "provider", observation.provider, data.get("provider"))
-            self._mismatch(
-                "observation",
-                observation.id,
-                "evidence",
-                sorted({ref.artifact for ref in observation.evidence}),
-                sorted(_string_list(data.get("evidence"))),
-            )
-        for observation_id in sorted(set(witnessed) - self._recorded_observation_ids):
-            self.problems.append(
-                f"the event chain witnesses observation {observation_id}, which observations.jsonl "
-                f"does not record"
-            )
+            for observation_id in sorted(set(witnessed) - seen):
+                self.problems.append(
+                    f"the event chain witnesses observation {observation_id}, which {name} does not record"
+                )
 
     def _reconcile_findings(self, segment: Sequence[dict[str, Any]]) -> None:
         witnessed = _witnessed(segment, "FINDING_ADDED", "finding")
@@ -296,6 +362,12 @@ class Replayer:
                 sorted(finding.cve),
                 sorted(_string_list(data.get("cve"))),
             )
+            self._reconcile_record_digest(
+                "finding",
+                finding.id,
+                data,
+                {finding.id: sha256_text(canonical_json(finding.model_dump(mode="json")))},
+            )
         ended = next((row for row in reversed(segment) if row.get("type") == "RUN_ENDED"), None)
         expected = (ended or {}).get("data", {}).get("findings")
         if isinstance(expected, int) and expected != len(self._findings):
@@ -303,6 +375,29 @@ class Replayer:
                 f"the final RUN_ENDED event records {expected} findings, but findings.json records "
                 f"{len(self._findings)}"
             )
+
+    def _reconcile_record_digest(
+        self,
+        what: str,
+        record_id: str,
+        data: dict[str, Any],
+        recorded: dict[str, str],
+        *,
+        source: str = "",
+    ) -> None:
+        """Compare the digest the chain records for a record with the record on disk.
+
+        The event's own fields are a summary of what a record holds, not the record: an observation's
+        value, taint and trust class reach no event field, so an edit to any of them used to replay
+        clean. The digest is what covers those, and a run directory written before v1.2 carries none -
+        for those, re-deriving findings from observations is the check that sees an edited value
+        (`eval/replay_pass.py`), which this method deliberately does not attempt.
+        """
+        witnessed = data.get("record")
+        if not isinstance(witnessed, str) or not witnessed:
+            return
+        subject = f"{record_id} in {source}" if source else record_id
+        self._mismatch(what, subject, "record digest", recorded.get(record_id), witnessed)
 
     def _mismatch(self, what: str, record_id: str, field: str, recorded: Any, witnessed: Any) -> None:
         if recorded != witnessed:

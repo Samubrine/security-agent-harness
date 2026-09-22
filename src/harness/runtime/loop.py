@@ -32,6 +32,7 @@ from harness.findings.validate import validate_all
 from harness.llm.prompts import parse_agent_turn
 from harness.models import (
     ApprovalRequest,
+    Finding,
     CapabilityProposal,
     EvidenceGap,
     FollowUpNeed,
@@ -49,12 +50,27 @@ from harness.providers.necessity import CAPABILITY_OUTPUT_KINDS, cache_key
 from harness.policy.ports import render_window
 from harness.runtime.replan import follow_up_needs
 from harness.runtime.fsm import RunState, State
-from harness.util import canonical_json, iso, new_id, utcnow
+from harness.util import canonical_json, iso, new_id, sha256_text, utcnow
 
 #: Human-facing description and default arguments per capability. The *machine* definition of what
 #: a capability produces lives in ``harness.providers.necessity.CAPABILITY_OUTPUT_KINDS`` and is
 #: read from there, so the catalogue the model sees and the gate that judges it cannot disagree
 #: about what "this need is already met" means.
+def observation_digest(observation: Observation) -> str:
+    """Identity of a recorded observation, over every field it is persisted with.
+
+    The event that witnesses an observation carries its id, kind, provider and evidence. Everything
+    else - the value above all - reaches ``observations.json`` and nothing else, so the chain could not
+    tell an edited value from a recorded one; this is the digest replay compares against (R2-31).
+    """
+    return sha256_text(canonical_json(observation.model_dump(mode="json")))
+
+
+def finding_digest(finding: Finding) -> str:
+    """Identity of a recorded finding, over every field it is persisted with."""
+    return sha256_text(canonical_json(finding.model_dump(mode="json")))
+
+
 CATALOGUE_EXPECTATIONS: dict[str, dict[str, Any]] = {
     "service.enumerate": {
         "expects": "service, product, version and CPE observations for each open port",
@@ -935,6 +951,11 @@ class InvestigationLoop:
                     "kind": observation.kind,
                     "provider": observation.provider,
                     "evidence": [r.artifact for r in observation.evidence],
+                    # A digest of the whole record as written, so replay can reconcile the fields the
+                    # event does not spell out - the value above all, which is the field a prompt, a
+                    # report and the evaluator actually read. An added key: records written before it
+                    # existed simply have nothing to compare (R2-31).
+                    "record": observation_digest(observation),
                 },
             )
         for gap in list(parsed.gaps) + list(result.gaps or []):
@@ -1016,6 +1037,9 @@ class InvestigationLoop:
                     "title": finding.title,
                     "status": finding.status,
                     "cve": finding.cve,
+                    # See OBSERVATION_ADDED: the claim text, severity and confidence are not spelled out
+                    # here, so the digest is what reconciles them.
+                    "record": finding_digest(finding),
                 },
             )
             for claim in finding.claims:
@@ -1078,6 +1102,15 @@ class InvestigationLoop:
             base_args = dict(expectation.get("args") or {})
             offered: list[dict[str, Any]] = []
             seen_keys: set[str] = set()
+            # Whether a port window can even be offered for this capability: every eligible provider
+            # has to accept a `ports` argument, or the catalogue would propose one that some of them
+            # reject. `vulnerability.match` is the case that matters - its provider declares no
+            # arguments at all - and a net grant does authorise it.
+            takes_ports = bool(providers) and all(
+                isinstance(provider.spec.input_schema.get("properties"), Mapping)
+                and "ports" in provider.spec.input_schema["properties"]
+                for provider in providers
+            )
             for grant in candidates:
                 variants = [base_args]
                 if capability == "log.read" and grant.kind == "fs":
@@ -1088,7 +1121,7 @@ class InvestigationLoop:
                     # something the scope authorises. A grant without a window adds nothing, which
                     # keeps the prompts of every existing scope byte-identical (R2-05).
                     offered_args = dict(variant)
-                    if grant.ports is not None and "ports" not in offered_args:
+                    if grant.ports is not None and takes_ports and "ports" not in offered_args:
                         offered_args["ports"] = render_window(grant.ports)
                     key = canonical_json({"grant": grant.id, "args": offered_args})
                     if key in seen_keys:

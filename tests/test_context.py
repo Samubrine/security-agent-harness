@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -132,3 +133,52 @@ def test_retrieval_query_drops_stopwords() -> None:
     assert "the" not in tokens
     assert "services" in query.lower()
     assert "port_scan" in query
+
+
+def test_the_run_digest_is_bounded_by_withholding_detail_not_characters() -> None:
+    """A clamped document is not a smaller document, it is a broken one.
+
+    The digest lives in a tagged block a reader scans for, so a cut mid-string loses the closing tag
+    and the planner can no longer read it. It is bounded by leaving detail out and saying so.
+    """
+    from harness.context.builder import _bounded_digest
+
+    payload = {
+        "step": 1,
+        "observations": [
+            {"id": f"o-{i}", "kind": "service", "untrusted_value": "x" * 400} for i in range(50)
+        ],
+    }
+    text = _bounded_digest(payload, 3_000)
+
+    assert len(text) <= 3_000, len(text)
+    digest = json.loads(text)
+    assert digest["digest_budget"]["limit_chars"] == 3_000
+    assert digest["observations"], "the ids and kinds are what a planner needs most"
+    assert digest["digest_budget"]["omitted_untrusted_values"] > 0
+
+
+def test_a_digest_whose_overflow_is_outside_observations_is_still_bounded() -> None:
+    """The catalogue is echoed into the digest, so a run with many grants overflows elsewhere."""
+    from harness.context.builder import _bounded_digest
+
+    payload = {
+        "step": 1,
+        "observations": [],
+        "capabilities": [{"capability": f"c-{i}", "grants": [{"grant": "g" * 40}]} for i in range(400)],
+    }
+    text = _bounded_digest(payload, 2_000)
+
+    assert len(text) <= 2_000, len(text)
+    assert json.loads(text)["digest_budget"]["trimmed_fields"] == ["capabilities"]
+
+
+def test_a_pre_serialised_digest_is_bounded_as_a_document() -> None:
+    """Cutting a serialised document in half returns something that is not a document."""
+    from harness.context.builder import _bounded_digest
+
+    bounded = _bounded_digest(json.dumps({"step": 1, "observations": []}), 1_000)
+    assert json.loads(bounded) == {"step": 1, "observations": []}
+
+    unparseable = _bounded_digest("not json at all", 1_000)
+    assert json.loads(unparseable)["error"]

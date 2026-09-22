@@ -54,7 +54,10 @@ def parse_port_spec(value: object) -> list[tuple[int, int]] | None:
 
 def _port(text: str) -> int | None:
     candidate = text.strip()
-    if not candidate.isdigit():
+    # `str.isdigit()` is true for characters `int()` refuses (superscripts) and for fullwidth digits
+    # that `int()` happily reads as another number - a specification two readers can disagree about,
+    # which is the one thing this parser must not produce. ASCII digits only.
+    if not candidate.isascii() or not candidate.isdigit():
         return None
     number = int(candidate)
     return number if 0 < number <= _MAX_PORT else None

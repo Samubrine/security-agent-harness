@@ -187,6 +187,7 @@ def _authorising_network(scope: ScopeFile, alias: str, value: str) -> ScopeNetwo
         ip = ipaddress.ip_address(value)
     except ValueError as exc:
         raise ScopeError(f"alias {alias!r} names {value!r}, which is not an IP address") from exc
+    matching: list[ScopeNetwork] = []
     for network in scope.networks:
         try:
             cidr = ipaddress.ip_network(network.cidr, strict=False)
@@ -204,10 +205,35 @@ def _authorising_network(scope: ScopeFile, alias: str, value: str) -> ScopeNetwo
                     f"scope {scope.scope_id} include entry {entry!r} is not an IP address"
                 ) from exc
             if allowed == ip:
-                return network
-    raise ScopeError(
-        f"alias {alias!r} names {value}, which the scope {scope.scope_id} does not include"
-    )
+                matching.append(network)
+                break
+    if not matching:
+        raise ScopeError(
+            f"alias {alias!r} names {value}, which the scope {scope.scope_id} does not include"
+        )
+    return _narrowest_network(scope, alias, matching)
+
+
+def _narrowest_network(scope: ScopeFile, alias: str, matching: list[ScopeNetwork]) -> ScopeNetwork:
+    """The authorising network whose statement is the most specific.
+
+    More than one network can cover one host, and they can disagree about ports. Returning the first
+    one would silently drop another's window (a window stated on the second network covering the same
+    host was ignored), so the authorisation is the *intersection* of what the matching networks say:
+    a network that says nothing about ports does not widen one that does, and two windows narrow to
+    the ports both allow. Minting no grant at all would be the other safe answer; this one keeps a
+    host whose networks agree working.
+    """
+    windows = [set(network.ports) for network in matching if network.ports is not None]
+    if not windows:
+        return matching[0]
+    allowed = set.intersection(*windows)
+    if not allowed:
+        raise ScopeError(
+            f"alias {alias!r} is authorised by networks whose port windows do not overlap "
+            f"({windows}); the scope authorises no port for it"
+        )
+    return matching[0].model_copy(update={"ports": sorted(allowed)})
 
 
 def _require_authorised_path(scope: ScopeFile, alias: str, value: str) -> None:

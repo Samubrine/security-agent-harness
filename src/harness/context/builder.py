@@ -7,6 +7,8 @@ that is applied before the text is handed to the model.
 
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -154,8 +156,13 @@ def _bounded_digest(payload: Any, limit_chars: int) -> str:
     therefore gets a smaller true document instead of a larger false one.
     """
     if isinstance(payload, str):
-        text = payload
-        return text if len(text) <= limit_chars else clamp_text(text, limit_chars)
+        # A pre-serialised digest: bound it as a *document*, never as characters, because a string cut
+        # in half is not a smaller digest - it is a broken one, and the block it lives in is what a
+        # reader scans for.
+        try:
+            return _bounded_digest(json.loads(payload), limit_chars)
+        except (json.JSONDecodeError, ValueError):
+            return _canonical({"error": "the run digest was not valid JSON"})
     text = _canonical(payload)
     if len(text) <= limit_chars or not isinstance(payload, dict):
         return text
@@ -187,9 +194,28 @@ def _bounded_digest(payload: Any, limit_chars: int) -> str:
         del observations[:drop]
         omitted_observations += drop
     digest["observations"] = observations
+    # The other lists can be the bulk of a large run (the catalogue is echoed here, and a scope with
+    # many grants makes it long), so they are trimmed largest-first when the observations alone did
+    # not bring the document under the cap. Everything trimmed is named in `digest_budget`, so the
+    # document says what it is not carrying.
+    trimmed: list[str] = []
+    other_lists = sorted(
+        (
+            (len(_canonical(value)), key)
+            for key, value in digest.items()
+            if key != "observations" and isinstance(value, list)
+        ),
+        reverse=True,
+    )
+    for _, key in other_lists:
+        if len(_canonical(digest)) <= limit_chars:
+            break
+        digest[key] = []
+        trimmed.append(key)
     digest["digest_budget"] = {
         "limit_chars": limit_chars,
         "omitted_untrusted_values": omitted_values,
         "omitted_observations": omitted_observations,
+        "trimmed_fields": trimmed,
     }
     return _canonical(digest)

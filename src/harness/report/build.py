@@ -36,8 +36,10 @@ def _untrusted_blocks(events: Sequence[Mapping[str, Any]]) -> int:
     The report used to assert the wrapping happened as a property of the design; the count is a fact
     about this run, and zero is an answer (R2-02).
     """
+    # The *rendered* count, not the number the loop drew: when a run's digest outgrows its tier cap
+    # the builder withholds values, and the report's sentence is about what reached the model.
     counts = [
-        int((event.get("data") or {}).get("untrusted_blocks") or 0)
+        int((event.get("data") or {}).get("untrusted_blocks_rendered") or 0)
         for event in events
         if event.get("type") == "CONTEXT_ASSEMBLED"
     ]

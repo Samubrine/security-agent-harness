@@ -140,28 +140,60 @@ class ModelMetadata(_Frozen):
 #: model does not turn already-signed authority into unverifiable bytes.
 PAYLOAD_VERSION = 2
 
-#: Fields that joined the payload at version 2. `.` addresses a key inside each entry of a list.
-_LATER_PAYLOAD_FIELDS: tuple[str, ...] = ("payload_version", "networks.ports")
+#: Which payload version introduced which field. `.` addresses a key inside each entry of a list.
+#: Keyed by version rather than held as one flat list, because a record that declares v2 must keep
+#: the fields v2 introduced: a flat list would strip `payload_version` itself from a v2 record as
+#: soon as a v3 field existed, breaking a signature that cannot be re-made (the frozen run's key is
+#: gone). Adding a field means adding one line here, with the version that added it.
+_PAYLOAD_FIELDS_BY_VERSION: dict[int, tuple[str, ...]] = {
+    2: ("payload_version", "networks.ports"),
+}
 
 
-def _strip_later_payload_fields(payload: dict[str, Any]) -> None:
-    """Reduce a v2 payload dict to its v1 shape, in place.
+def _later_payload_fields(declared_version: int) -> list[str]:
+    """The payload paths introduced *after* `declared_version`, in version order."""
+    out: list[str] = []
+    for version in sorted(_PAYLOAD_FIELDS_BY_VERSION):
+        if version > declared_version:
+            out.extend(_PAYLOAD_FIELDS_BY_VERSION[version])
+    return out
 
-    v1 is "every field this model had at v1.1": the two names above are the only ones added since,
-    so removing them is the whole conversion. It is deliberately a fixed list rather than a rule
-    about defaults: a rule would change the meaning of signatures already in the wild, while this
-    only makes the payload of an old record equal to what was signed.
+
+def _carries_later_field(scope: "ScopeFile", path: str) -> bool:
+    """Whether the record actually states the field at `path`. A default is not a statement.
+
+    Only the shapes the payload has grown so far are expressible here: a bare field name and a field
+    inside each entry of a list of models. Anything else would need a reader per path, and inventing
+    one for a field that does not exist yet is how this kind of check rots.
     """
-    for path in _LATER_PAYLOAD_FIELDS:
-        head, _, tail = path.partition(".")
-        if not tail:
-            payload.pop(head, None)
-            continue
-        entries = payload.get(head)
-        if isinstance(entries, list):
-            for entry in entries:
-                if isinstance(entry, dict):
-                    entry.pop(tail, None)
+    head, _, tail = path.partition(".")
+    if not tail:
+        # The version field itself: the model always has it, and the strip rule decides whether its
+        # value is covered by a signature at all.
+        return False
+    entries = getattr(scope, head, None)
+    if isinstance(entries, list):
+        return any(getattr(entry, tail, None) is not None for entry in entries)
+    return False
+
+
+def _strip_later_payload_fields(payload: dict[str, Any], declared_version: int) -> None:
+    """Reduce a payload dict to the shape `declared_version` was signed under, in place.
+
+    The conversion is a fixed list of fields per version rather than a rule about defaults: a rule
+    would change the meaning of signatures already in the wild, while this only makes the payload of
+    an old record equal to what was signed.
+    """
+    for path in _later_payload_fields(declared_version):
+            head, _, tail = path.partition(".")
+            if not tail:
+                payload.pop(head, None)
+                continue
+            entries = payload.get(head)
+            if isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        entry.pop(tail, None)
 
 
 class ScopeWindow(_Base):
@@ -248,7 +280,7 @@ class ScopeFile(_Base):
         data = self.model_dump(mode="json")
         data.pop("signature", None)
         if self.payload_version < PAYLOAD_VERSION:
-            _strip_later_payload_fields(data)
+            _strip_later_payload_fields(data, self.payload_version)
         return data
 
     @model_validator(mode="after")
@@ -261,12 +293,28 @@ class ScopeFile(_Base):
         escalation, but "part of this record is not covered by its signature" is not a state a record
         should be able to reach by editing bytes. One line, fail closed.
         """
-        if self.payload_version < PAYLOAD_VERSION and any(
-            network.ports is not None for network in self.networks
-        ):
+        if self.payload_version < 1:
+            # Every version below the one that introduced the field selects the same shape, so a value
+            # that is not a version would let a record be relabelled without changing anything the
+            # signature covers.
+            raise ValueError(f"payload_version {self.payload_version} is not a payload shape")
+        if self.payload_version > PAYLOAD_VERSION:
+            # Fail closed: this build does not know what that version's payload shape is, so it cannot
+            # check the signature at all, and checking it as if it were the current shape would be a
+            # guess dressed as a verification.
             raise ValueError(
-                f"a network carries a ports window but the record declares payload_version "
-                f"{self.payload_version}, which has no such field; re-sign the record"
+                f"the record declares payload_version {self.payload_version}, which this build does "
+                f"not verify (it knows up to {PAYLOAD_VERSION}); a newer build signed it"
+            )
+        stated = [
+            path
+            for path in _later_payload_fields(self.payload_version)
+            if _carries_later_field(self, path)
+        ]
+        if stated:
+            raise ValueError(
+                f"the record states {sorted(stated)}, which payload_version {self.payload_version} "
+                "has no field for; re-sign the record"
             )
         return self
 

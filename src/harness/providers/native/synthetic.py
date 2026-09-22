@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harness.models import ProviderSpec
+from harness.policy.ports import parse_port_spec
 from harness.providers.base import ProviderRequest, ProviderResult, failed_result
 
 MEDIA_TYPE = "application/nmap+xml"
@@ -43,7 +44,10 @@ class SyntheticProvider:
             capabilities=["service.enumerate"],
             input_schema={
                 "type": "object",
-                "properties": {"profile": {"type": "string"}},
+                # `ports` is declared and honoured: a scan of a scope that authorises only some ports
+                # must return only those, or the run's evidence would describe ports the scope does
+                # not cover (R2-05).
+                "properties": {"profile": {"type": "string"}, "ports": {"type": "string"}},
                 "additionalProperties": False,
             },
             output_media_type=MEDIA_TYPE,
@@ -90,6 +94,28 @@ class SyntheticProvider:
                 impact=f"the fixture for {alias} is missing, so no service evidence could be produced",
                 kind="provider_failure",
             )
+        ports = request.args.get("ports")
+        if ports:
+            window = parse_port_spec(ports)
+            if window is None:
+                return failed_result(
+                    request=request,
+                    provider=self.spec.id,
+                    error=f"refusing port specification {ports!r}",
+                    impact="the port argument was not a port specification, so nothing was scanned",
+                    kind="permission_denied",
+                    exit_status="denied",
+                )
+            filtered = _only_ports(data, window)
+            if filtered is None:
+                return failed_result(
+                    request=request,
+                    provider=self.spec.id,
+                    error=f"recorded scan {filename} could not be filtered to {ports!r}",
+                    impact="the fixture is not a scan document, so no service evidence was produced",
+                    kind="provider_failure",
+                )
+            data = filtered
         return ProviderResult(
             provider=self.spec.id,
             capability=request.capability,
@@ -99,6 +125,32 @@ class SyntheticProvider:
             argv=[],
             provider_version="synthetic-1",
         )
+
+
+def _only_ports(data: bytes, window: list[tuple[int, int]]) -> bytes | None:
+    """A recorded scan restricted to the ports the call named, or ``None`` if it is not a scan.
+
+    This is what a scanner given `-p` would return, and it is the only way a fixture-backed provider
+    can honour a port window: the recorded document describes every port that was open when it was
+    taken, and a scope that authorises some of them must not put the rest into the run as evidence.
+    The filtering happens before the bytes become an artifact, so the artifact, its digest and every
+    span inside it describe the filtered document.
+    """
+    from lxml import etree
+
+    allowed = {port for start, end in window for port in range(start, end + 1)}
+    try:
+        root = etree.fromstring(data)
+    except etree.XMLSyntaxError:
+        return None
+    for host in root.iter("host"):
+        for port in list(host.iter("port")):
+            portid = port.get("portid")
+            if portid is None or not str(portid).isdigit() or int(portid) not in allowed:
+                parent = port.getparent()
+                if parent is not None:
+                    parent.remove(port)
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8")
 
 
 #: The only aliases this provider knows. Anything else is a failure with a gap, which is how a

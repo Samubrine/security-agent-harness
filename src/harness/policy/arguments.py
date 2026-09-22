@@ -76,12 +76,17 @@ def _check(schema: Any, value: Any, *, path: str) -> str | None:
                     problem = _check(sub, value[name], path=f"{path}.{name}")
                     if problem is not None:
                         return problem
-        if schema.get("additionalProperties") is False and isinstance(properties, Mapping):
-            unknown = sorted(str(name) for name in value if name not in properties)
+        if schema.get("additionalProperties") is False:
+            # No `properties` at all still means "nothing else is accepted": a schema that declares
+            # `additionalProperties: false` and forgets to list its properties is a provider saying
+            # it takes no arguments, not one saying it takes anything.
+            declared_names = properties if isinstance(properties, Mapping) else {}
+            unknown = sorted(str(name) for name in value if name not in declared_names)
             if unknown:
+                accepts = sorted(str(name) for name in declared_names)
                 return (
                     f"{path} carries argument(s) {unknown} that the provider does not declare "
-                    f"(it accepts {sorted(str(name) for name in properties)})"
+                    f"(it accepts {accepts or 'no arguments'})"
                 )
 
     items = schema.get("items")

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from harness.models import Grant
+from harness.models import EvidenceRef, Grant, ProviderExecution
 from harness.providers.base import ProviderRequest
 from harness.providers.native.logfile import LogFileProvider, media_type_for
 from harness.providers.native.nmap import NmapProvider
@@ -171,3 +171,81 @@ def test_nmap_advertises_http_probe_but_excludes_it() -> None:
     assert spec.supports("service.enumerate")
     assert not spec.supports("http.probe")
     assert spec.requires_network_egress is True
+
+
+def test_the_synthetic_provider_honours_a_port_window(fixtures_dir: Path) -> None:
+    """A recorded scan restricted to the ports the call named.
+
+    The fixture describes every port that was open when it was taken; a scope that authorises only
+    some of them must not put the rest into the run as evidence (R2-05).
+    """
+    from datetime import timedelta
+
+    from harness.models import Grant
+    from harness.providers.base import ProviderRequest
+    from harness.util import utcnow
+
+    provider = SyntheticProvider(fixture_root=fixtures_dir / "nmap")
+    grant = Grant(
+        id="g-window",
+        resource="net:10.77.0.11",
+        alias="lab-web-01",
+        capabilities=["service.enumerate"],
+        ports=[80],
+        expires_at=utcnow() + timedelta(hours=1),
+        origin="test",
+        kind="net",
+    )
+
+    def ports_for(args: dict) -> list[int]:
+        from harness.parsers.nmap_xml import parse_nmap_xml
+
+        result = provider.invoke(
+            ProviderRequest(
+                run_id="run-synthetic-ports",
+                execution_id="x-1",
+                capability="service.enumerate",
+                args=args,
+                grant=grant,
+                target_alias="lab-web-01",
+                timeout_s=10,
+            )
+        )
+        assert result.exit_status == "completed", result.error
+        parsed = parse_nmap_xml(
+            result.stdout,
+            execution=ProviderExecution(
+                id="x-1",
+                run_id="run-synthetic-ports",
+                provider="native:synthetic",
+                capability="service.enumerate",
+                grant="g-window",
+                policy_decision="pd-1",
+                necessity_decision="d-1",
+                started_at=utcnow(),
+                ended_at=utcnow(),
+                exit_status="completed",
+            ),
+            run_id="run-synthetic-ports",
+            artifact_digest="sha256:" + "0" * 64,
+            # A real span over the filtered bytes: the parser refuses an observation whose evidence
+            # nothing can cite, which is the property being relied on elsewhere.
+            evidence_of=lambda start, end: [
+                EvidenceRef(
+                    artifact="sha256:" + "0" * 64,
+                    media_type="application/nmap+xml",
+                    byte_start=start,
+                    byte_end=end,
+                )
+            ],
+            target="lab-web-01",
+        )
+        return sorted(
+            int(obs.value["port"]) for obs in parsed.observations if obs.kind == "service"
+        )
+
+    unfiltered = ports_for({})
+    assert len(unfiltered) > 1, unfiltered
+    assert ports_for({"ports": "80"}) == [80]
+    assert ports_for({"ports": str(unfiltered[0])}) == [unfiltered[0]]
+    assert ports_for({"ports": "1-65535"}) == unfiltered

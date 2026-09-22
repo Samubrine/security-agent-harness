@@ -153,3 +153,45 @@ def test_the_event_log_itself_still_raises_on_a_broken_chain(finished_run) -> No
     (run_dir / "events.jsonl").write_text("\n".join(events) + "\n", encoding="utf-8")
     with pytest.raises(EventChainError):
         EventLog(run_dir / "events.jsonl", artifacts.run_id).verify_chain()
+
+def test_verify_detects_an_edited_observation_value(finished_run) -> None:
+    """The value is what a prompt, a report and the evaluator read, and no event field carries it.
+
+    A record written since v1.2 is witnessed by a digest of the whole record, which is what makes an
+    edit to the *value* visible; the span and validator checks cannot see it, because both are about the
+    bytes the span points at rather than about what the record says they mean (R2-31).
+    """
+    _, run_dir = finished_run
+    observations = [
+        json.loads(line)
+        for line in (run_dir / "observations.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert observations, "the run recorded no observations"
+    observations[0]["value"]["target"] = "10.77.0.99"
+    _rewrite(run_dir / "observations.jsonl", observations)
+
+    replayer = Replayer(run_dir)
+    assert replayer.verify() is False
+    assert any("record digest" in problem for problem in replayer.problems), replayer.problems
+
+
+def test_verify_detects_the_two_copies_of_a_record_set_disagreeing(finished_run) -> None:
+    """The runtime writes `observations.jsonl` and `observations.json`; the evaluator scores the array.
+
+    So editing the array alone used to flip the evaluation's metrics while replay called the run clean
+    (R2-31).
+    """
+    _, run_dir = finished_run
+    folded = run_dir / "observations.json"
+    rows = json.loads(folded.read_text(encoding="utf-8"))
+    rows[0]["value"]["target"] = "10.77.0.99"
+    folded.write_text(json.dumps(rows), encoding="utf-8")
+
+    replayer = Replayer(run_dir)
+    assert replayer.verify() is False
+    assert any("observations.json" in problem for problem in replayer.problems), replayer.problems
+
+
+def _rewrite(path, rows) -> None:
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")

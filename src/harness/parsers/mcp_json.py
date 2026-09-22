@@ -30,6 +30,7 @@ that says what was wrong.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from harness.models import GAP_KINDS, EvidenceGap, EvidenceRef, GapKind, ProviderExecution, TrustClass
@@ -96,15 +97,32 @@ def parse_mcp_json(
         target=target,
     )
     try:
-        envelope: Any = json.loads(ctx.data.decode("utf-8") or "{}")
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        # `parse_int` bounds the conversion per number rather than letting the interpreter refuse the
+        # whole document: a server that sends a number too long to read loses that value, not the
+        # observations beside it.
+        envelope: Any = json.loads(ctx.data.decode("utf-8") or "{}", parse_int=_parse_int)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return ParseResult(
             observations=[],
             gaps=[
                 _gap(
                     execution,
                     run_id,
-                    impact="the MCP response was not readable JSON, so it produced no observations",
+                    impact=f"the MCP response was not readable JSON ({exc.__class__.__name__}), so it produced no observations",
+                )
+            ],
+        )
+    except ValueError as exc:
+        # Not redundant: `json.loads` can still refuse a document for reasons the classes above do not
+        # cover (a number beyond every limit), and a remote peer must not be able to make the harness
+        # traceback out of its parser.
+        return ParseResult(
+            observations=[],
+            gaps=[
+                _gap(
+                    execution,
+                    run_id,
+                    impact=f"the MCP response could not be decoded ({exc.__class__.__name__}), so it produced no observations",
                 )
             ],
         )
@@ -273,6 +291,50 @@ def _gap(
     )
 
 
+#: The longest integer literal this parser will convert. Python refuses to convert one past ~4300
+#: digits and its refusal is a bare `ValueError` out of `json.loads` - which would discard the whole
+#: payload, including the observations that were fine. A number this long is not a measurement.
+_MAX_INT_DIGITS = 64
+
+
+@dataclass(frozen=True)
+class _UnconvertedNumber:
+    """A JSON number kept as its own text because it is too long to convert.
+
+    Deliberately *not* a `str` subclass: the value checks below ask whether a field is a string, and a
+    number that smuggled itself in as one would be accepted where a string is required.
+    """
+
+    text: str
+
+
+def _parse_int(text: str) -> Any:
+    return int(text) if len(text) <= _MAX_INT_DIGITS else _UnconvertedNumber(text)
+
+
+def _describe(value: Any) -> str:
+    """What kind of value this is, in words a gap message can use."""
+    if isinstance(value, _UnconvertedNumber):
+        return f"a number of {len(value.text)} digits, too long to convert"
+    return f"a {type(value).__name__}"
+
+
+def _brief(value: Any, limit: int = 120) -> str:
+    """A printable form of an untrusted value, and never a way to fail.
+
+    A JSON integer has no size limit and Python refuses to render one past ~4300 digits, so `repr` on
+    a payload value can raise: a gap message must not be the thing that turns a bad observation into
+    an aborted run. The clamp is the second reason - a gap record is not a place to copy a payload.
+    """
+    if isinstance(value, _UnconvertedNumber):
+        return f"<number of {len(value.text)} digits>"
+    try:
+        text = repr(value)
+    except Exception:  # noqa: BLE001 - untrusted input; its rendering is allowed to be impossible
+        return f"<{type(value).__name__}>"
+    return text[:limit]
+
+
 def _value_problem(value: dict[str, Any]) -> str | None:
     """Why this payload's typed values cannot be accepted, or ``None`` when they can.
 
@@ -281,18 +343,24 @@ def _value_problem(value: dict[str, Any]) -> str | None:
     """
     cvss = value.get("cvss")
     if cvss is not None:
+        if isinstance(cvss, _UnconvertedNumber):
+            return "cvss is a number too long to convert, and the harness reads it as a score"
         if isinstance(cvss, bool) or not isinstance(cvss, (int, float)):
-            return f"cvss is {type(cvss).__name__} ({cvss!r}), and the harness reads it as a score"
-        if not 0.0 <= float(cvss) <= 10.0:
-            return f"cvss is {cvss!r}, outside the 0-10 range"
+            return f"cvss is {_describe(cvss)}, and the harness reads it as a score"
+        # Compared in place rather than through `float(cvss)`: a JSON integer has no size limit, and
+        # `float(10**400)` raises `OverflowError` out of a function whose whole job is to turn a bad
+        # value into a recorded gap. Python compares the huge int against the bounds without
+        # converting it, and `nan`/`inf` (both accepted by `json.loads`) fail the same comparison.
+        if not 0 <= cvss <= 10:
+            return f"cvss is {_brief(cvss)}, outside the 0-10 range"
     severity = value.get("severity")
-    if severity is not None and str(severity) not in SEVERITIES:
+    if severity is not None and (not isinstance(severity, str) or severity not in SEVERITIES):
         return (
-            f"severity is {severity!r}, and this harness knows {sorted(SEVERITIES)}; a server does "
-            "not get to invent a severity band"
+            f"severity is {_brief(severity)}, and this harness knows {sorted(SEVERITIES)}; a server "
+            "does not get to invent a severity band"
         )
     for name in _STRING_FIELDS:
         if name in value and not isinstance(value[name], str):
-            return f"{name} is {type(value[name]).__name__} ({value[name]!r}), and it must be a string"
+            return f"{name} is {_describe(value[name])}, and it must be a string"
     return None
 

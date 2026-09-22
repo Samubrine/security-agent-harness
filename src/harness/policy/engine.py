@@ -68,19 +68,26 @@ REASON_ARGUMENTS_INVALID = "arguments_do_not_match_the_provider_schema"
 DEFAULT_MAX_REJECTIONS = 3
 
 
-def _ports_are_granted(args: Mapping[str, Any], grant: Grant) -> bool:
+def _ports_are_granted(args: Mapping[str, Any], grant: Grant, provider: ProviderSpec) -> bool:
     """Whether every port this call would reach is inside the grant's window.
 
     A grant with no window says nothing about ports, so nothing here can be violated - which is the
     pre-v1.2 behaviour, kept so that a scope record without a window keeps working. A grant *with* a
-    window is a statement about exactly which ports are authorised, and then:
+    window is a statement about exactly which ports are authorised, and then a named port
+    specification must be entirely inside it, and a call that names no ports at all is refused,
+    because the provider would otherwise choose its own default set - which the window never saw
+    (R2-05).
 
-    * a named port specification must be entirely inside it, and
-    * a call that names no ports at all is refused, because the provider would choose its own default
-      set and the window cannot vouch for a choice it did not see. Refusing is the fail-closed
-      reading; the alternative would be to guess which ports the adapter defaults to (R2-05).
+    The check needs the provider, because a window can only be honoured by a provider that can be
+    told which ports to use. One that declares no `ports` argument (the offline matcher, the log
+    reader) cannot reach a port the window did not authorise at all, so there is nothing to refuse
+    and refusing would only stop a call the scope permits. The limit is stated in D26: the window is
+    enforced on the argument that carries it.
     """
     if grant.ports is None:
+        return True
+    declared = provider.input_schema.get("properties")
+    if not isinstance(declared, Mapping) or "ports" not in declared:
         return True
     return all_within(args.get("ports"), grant.ports)
 
@@ -195,7 +202,7 @@ class PolicyEngine:
                 reasons.append(REASON_GRANT_EXPIRED)
             if capability not in grant.capabilities:
                 reasons.append(REASON_CAPABILITY_NOT_GRANTED)
-            if not _ports_are_granted(args, grant):
+            if not _ports_are_granted(args, grant, provider):
                 reasons.append(REASON_PORTS_NOT_GRANTED)
         if not provider.supports(capability):
             reasons.append(REASON_CAPABILITY_NOT_SUPPORTED)
