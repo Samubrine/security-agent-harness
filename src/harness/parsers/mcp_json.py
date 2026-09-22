@@ -1,11 +1,16 @@
 """Reader for MCP tool responses (``application/vnd.harness.mcp+json``).
 
 An MCP server is a remote service, so its reply is treated exactly like a banner: data, never
-instruction, and never a way to widen what the run knows about itself. Two controls make that
+instruction, and never a way to widen what the run knows about itself. Three controls make that
 concrete rather than aspirational:
 
 * **Observation kinds are an allowlist.** A server that invents a kind is not enriching the evidence
   graph, it is writing into a schema it does not own; unknown kinds are dropped and reported.
+* **A CVE match is not on that allowlist.** ``vulnerability_match`` is the one kind a finding may
+  cite as proof of a CVE, and the finding validator keys its CVE gate on exactly that. A server able
+  to declare the kind could therefore author a critical finding that passed a gate whose purpose is
+  to prove the match came from the digest-stamped snapshot, so the kind is refused here and named in
+  the gap (R2-01).
 * **Every observation is T3.** The trust level is set here from the transport and is never read
   from the payload, so a server cannot declare its own output trustworthy.
 """
@@ -36,9 +41,14 @@ ALLOWED_KINDS = frozenset(
         "http_summary",
         "banner",
         "injection_attempt",
-        "vulnerability_match",
     }
 )
+
+#: Kinds that exist in the vocabulary but that only the harness's own offline matcher may produce.
+#: Named separately from "unknown kind" so the recorded gap says *why* the observation was refused;
+#: a server that sends one is either confused about the protocol or trying to satisfy the CVE gate
+#: from the outside, and those are worth telling apart in an audit.
+MATCHER_ONLY_KINDS = frozenset({"vulnerability_match"})
 
 
 def parse_mcp_json(
@@ -97,6 +107,21 @@ def parse_mcp_json(
             continue
         kind = str(entry.get("kind") or "")
         value = entry.get("value")
+        if kind in MATCHER_ONLY_KINDS:
+            gaps.append(
+                EvidenceGap(
+                    id=new_id("g"),
+                    run_id=run_id,
+                    kind="partial_coverage",
+                    scope={"provider": execution.provider, "index": index, "kind": kind},
+                    impact=(
+                        "the MCP response reported a vulnerability match; only the harness's own "
+                        "offline matcher may produce one, so it was dropped rather than trusted"
+                    ),
+                    capability=execution.capability,
+                )
+            )
+            continue
         if kind not in ALLOWED_KINDS or not isinstance(value, dict):
             gaps.append(
                 EvidenceGap(

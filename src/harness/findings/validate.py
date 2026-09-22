@@ -10,8 +10,9 @@ Four checks carry most of the weight:
 1. every claim cites a current-run observation that actually exists;
 2. every cited observation's evidence span recomputes from its artifact bytes;
 3. a memory entry can never occupy the place where evidence is required;
-4. a reported CVE is backed by a matcher-produced observation, so it entered the run through the
-   snapshot rather than through a model's recollection.
+4. a reported CVE is backed by an observation the harness's own matcher produced, so it entered the
+   run through the snapshot rather than through a model's recollection or a remote server's
+   assertion.
 """
 
 from __future__ import annotations
@@ -20,6 +21,16 @@ from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
 from harness.models import Finding, Observation
+
+#: The parser whose observations may carry a CVE match. The harness selects a parser from the
+#: response's media type, so a provider payload cannot claim it - which is what makes this an
+#: identity check rather than a hint. `native:cve_matcher` is the only producer registered on this
+#: parser (see `harness.runtime.analysers`).
+MATCHER_PARSER = "vulnerability_json"
+
+#: The trust class that producer runs under. A remote service's observations are `local_mcp` or
+#: `external_provider`; only a local tool the harness started itself may assert a CVE.
+MATCHER_TRUST_CLASS = "local_tool"
 
 
 @dataclass
@@ -131,14 +142,25 @@ def _verifies(store: object, ref: object) -> bool:
 def _cve_is_evidenced(
     cve: str, cited: Sequence[str], observations: Mapping[str, Observation]
 ) -> bool:
-    """A CVE is admissible only if some cited observation recorded that exact CVE id.
+    """A CVE is admissible only if the *matcher itself* recorded that exact CVE id.
 
-    This is what makes "the model cannot author a CVE" checkable rather than aspirational: the only
-    component that writes a ``cve`` value into an observation is the offline matcher.
+    This is what makes "the model cannot author a CVE" checkable rather than aspirational. It used
+    to check the cited observation's ``kind``, which is a string the *producer* supplies: a remote
+    MCP payload declaring ``kind: vulnerability_match`` satisfied a gate whose entire purpose is to
+    prove the match came from the digest-stamped snapshot, and a fabricated critical finding passed
+    with zero violations (R2-01). The parser and the trust class are decided by the *harness* - the
+    first from the media type it routed to a parser, the second from the provider it started - so
+    they are the part of an observation a remote server cannot write.
     """
     for observation_id in cited:
         observation = observations.get(observation_id)
-        if observation is None or observation.kind != "vulnerability_match":
+        if observation is None:
+            continue
+        if observation.kind != "vulnerability_match":
+            continue
+        if observation.parser != MATCHER_PARSER:
+            continue
+        if str(observation.trust_class) != MATCHER_TRUST_CLASS:
             continue
         if str((observation.value or {}).get("cve") or "") == cve:
             return True
