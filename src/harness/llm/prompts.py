@@ -58,16 +58,34 @@ The runtime records what you asked for, what it refused, and why. Requests that 
 attempt to escape the catalogue are logged as validation failures."""
 
 
+#: The tags that delimit the blocks a *reader* scans for. A payload that emits one of them moves a
+#: boundary: `scripted._block` is non-greedy, so a forged `</run_digest>` truncates the block the
+#: planner reads and everything after it becomes free text the rules do not cover (R2-02).
+_BLOCK_TAGS = (DIGEST_OPEN, DIGEST_CLOSE, CATALOGUE_OPEN, CATALOGUE_CLOSE)
+_TAG_NEUTRALISED = "[block-tag-removed]"
+
+
+def _neutralise_block_tags(text: str) -> str:
+    """Replace the prompt's own delimiters wherever they appear inside embedded text.
+
+    Payload text is not trusted to avoid them: the delimiter is a string an attacker can type, and
+    the reader on the other side cannot tell a boundary the harness drew from one a payload drew.
+    """
+    for tag in _BLOCK_TAGS:
+        text = text.replace(tag, _TAG_NEUTRALISED)
+    return text
+
+
 def _as_json_block(payload: Any) -> str:
     if isinstance(payload, str):
         text = payload.strip()
         # A caller may hand us pre-serialised JSON; make it canonical anyway so the prompt (and
         # therefore the replay request digest) is stable across runs.
         try:
-            return canonical_json(json.loads(text))
+            return _neutralise_block_tags(canonical_json(json.loads(text)))
         except json.JSONDecodeError:
-            return text
-    return canonical_json(payload)
+            return _neutralise_block_tags(text)
+    return _neutralise_block_tags(canonical_json(payload))
 
 
 def render_turn_prompt(

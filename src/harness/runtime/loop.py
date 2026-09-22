@@ -43,6 +43,7 @@ from harness.models import (
     RunStatus,
     RunSummary,
 )
+from harness.context.spotlight import Spotlight
 from harness.providers.base import ProviderRequest, ProviderResult
 from harness.providers.necessity import CAPABILITY_OUTPUT_KINDS, cache_key
 from harness.policy.ports import render_window
@@ -164,6 +165,13 @@ class InvestigationLoop:
         #: would detect the same unresolved conflict on the next pass and ask for the same
         #: expansion forever; one resolving call per capability is the ceiling.
         self._follow_ups_attempted: set[str] = set()
+        #: How many untrusted blocks this run has rendered into prompts. Kept so the report's
+        #: safety section can state a fact the run recorded rather than a property the code is
+        #: supposed to have (R2-02).
+        self._untrusted_blocks = 0
+        #: The spotlighting layer over this run's tracker: one object that wraps untrusted text and
+        #: can count the blocks in what was rendered, so the loop can check its own output.
+        self.spotlight = Spotlight(taint)
         #: Why the run is ending, recorded where the reason is decided (see `_end_run`). Left unset
         #: by a run that ends because the investigation finished, which is what makes the summary
         #: status a fact about the run rather than a constant written next to a stop reason.
@@ -241,6 +249,10 @@ class InvestigationLoop:
                 catalogue=catalogue,
                 run_digest=self.run_digest(catalogue),
                 evidence_rollup="",
+                # The run's spotlight, so retrieved memory - which is derived from earlier runs'
+                # evidence and can carry text an attacker wrote - is wrapped by the same nonce as
+                # everything else (R2-02).
+                spotlight=self.spotlight,
             )
 
             suggestion = self._ask_model(bundle)
@@ -264,7 +276,15 @@ class InvestigationLoop:
     # -- model turn ------------------------------------------------------------------------
 
     def _ask_model(self, bundle: Any) -> dict[str, Any] | None:
-        self.budgets.add_tokens(bundle.total_tokens, 0)
+        # The rendered prompt must contain exactly the blocks the harness drew: fewer means the
+        # digest was truncated by a tier cap mid-wrapper (the JSON would be unreadable to the planner
+        # too), more would mean a forged tag survived neutralisation. Both are recorded rather than
+        # assumed, because "the wrapper is there" is the claim this whole boundary rests on (R2-02).
+        blocks_rendered = len(self.spotlight.blocks(bundle.user))
+        # The budget is charged what was sent, not the sum of the tiers: the skeleton around the tiers
+        # is in every prompt and in none of them, so the tier sum understated the cost of the turn it
+        # was accounting for (R2-27).
+        self.budgets.add_tokens(bundle.prompt_tokens, 0)
         self.ledger.record(
             self.state.step,
             input_tokens=bundle.total_tokens,
@@ -299,6 +319,11 @@ class InvestigationLoop:
                 "dropped_tokens": cost.dropped_tokens,
                 "over_cap_tiers": cost.over_cap_tiers,
                 "memory": memory_cost.model_dump(mode="json"),
+                # How many untrusted blocks this prompt carried. Recorded so the report's safety
+                # section can say what happened in this run instead of describing the design
+                # (R2-02).
+                "untrusted_blocks": self._untrusted_blocks,
+                "untrusted_blocks_rendered": blocks_rendered,
             },
         )
         request_text = bundle.system + "\x00" + bundle.user
@@ -1094,12 +1119,29 @@ class InvestigationLoop:
         }
 
     def run_digest(self, catalogue: Mapping[str, Any]) -> dict[str, Any]:
-        """The C2 tier: deterministic harness state, never raw provider output."""
+        """The C2 tier: deterministic harness state.
+
+        What is deterministic here is the *harness's* record: step, ids, kinds, providers, executed
+        and denied calls, the catalogue. The values those observations carry are provider bytes -
+        banner text, payload excerpts - so they are rendered as wrapped blocks instead of being
+        inlined into the one section the prompt calls deterministic. That section is exactly where a
+        payload wants to be, because the model is told to trust it (R2-02).
+        """
         return {
             "step": self.state.step,
             "objective_kind": self.context.skill.name,
             "observations": [
-                {"id": obs.id, "kind": obs.kind, "value": obs.value}
+                {
+                    "id": obs.id,
+                    "kind": obs.kind,
+                    "provider": obs.provider,
+                    "taint": obs.taint,
+                    # Named for what it is, so a reader of a recorded prompt cannot mistake the
+                    # value for structured state the harness produced.
+                    "untrusted_value": self._untrusted_block(
+                        canonical_json(obs.value), origin=obs.id, level=obs.taint
+                    ),
+                }
                 for obs in sorted(self.state.observations.values(), key=lambda o: o.id)
             ],
             "claims": [
@@ -1111,7 +1153,17 @@ class InvestigationLoop:
                 for obs in sorted(self.state.observations.values(), key=lambda o: o.id)
                 if obs.kind == "vulnerability_match"
             ],
-            "gaps": [{"id": g.id, "kind": g.kind, "impact": g.impact} for g in self.state.gaps],
+            "gaps": [
+                # An impact string can be a remote server's own words (see
+                # `harness.parsers.mcp_json`), so it is wrapped like any other free text from a
+                # provider.
+                {
+                    "id": g.id,
+                    "kind": g.kind,
+                    "impact": self._untrusted_block(g.impact, origin=g.id),
+                }
+                for g in self.state.gaps
+            ],
             "executed": list(self._attempts),
             "denied": [item for item in self.state.rejected_proposals if item.get("denied")],
             "capabilities": [
@@ -1125,6 +1177,15 @@ class InvestigationLoop:
             ],
             "granted_aliases": sorted({g["alias"] for entry in catalogue["capabilities"] for g in entry["grants"]}),
         }
+
+    def _untrusted_block(self, text: str, *, origin: str, level: str = "T3") -> str:
+        """Render provider or attacker text as a spotlight block, and count it for the record.
+
+        One place does the wrapping so every field that carries provider bytes is wrapped the same
+        way, and so the count the report reads is the count the prompt actually contained.
+        """
+        self._untrusted_blocks += 1
+        return self.spotlight.wrap(text, origin=origin, level=level)  # type: ignore[arg-type]
 
     # -- approvals and gaps ----------------------------------------------------------------
 

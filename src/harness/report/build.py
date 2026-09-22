@@ -7,6 +7,7 @@ from an archived directory months later and produce the same document.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,20 @@ SEVERITY_BANDS: tuple[tuple[float, str], ...] = (
     (4.0, "medium"),
     (0.1, "low"),
 )
+
+
+def _untrusted_blocks(events: Sequence[Mapping[str, Any]]) -> int:
+    """How many untrusted blocks this run rendered into prompts, from its own event trail.
+
+    The report used to assert the wrapping happened as a property of the design; the count is a fact
+    about this run, and zero is an answer (R2-02).
+    """
+    counts = [
+        int((event.get("data") or {}).get("untrusted_blocks") or 0)
+        for event in events
+        if event.get("type") == "CONTEXT_ASSEMBLED"
+    ]
+    return max(counts) if counts else 0
 
 
 def _port_window(run_dir: Path) -> str | None:
@@ -115,6 +130,7 @@ def build_report(*, run_dir: Path) -> tuple[str, dict[str, Any]]:
             "ended_at": ended.get("at", ""),
             "remote_egress": bool(run.get("enable_remote_egress")),
             "port_window": _port_window(run_dir),
+            "untrusted_blocks": _untrusted_blocks(summary_events),
         },
         "stats": stats,
         "findings": [{"id": v["finding"].id, **v["finding"].model_dump(mode="json"), "evidence": v["evidence"]} for v in findings_view],

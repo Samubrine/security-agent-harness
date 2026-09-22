@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from harness.runtime.replay import Replayer
+from harness.util import sha256_text
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RECORDED_RUN = FIXTURES / "run" / "port_scan"
@@ -188,3 +189,29 @@ def test_a_deleted_finding_is_reported(mutable_run: Path) -> None:
         f"{recorded - 1}" in problem
         for problem in replayer.problems
     ), replayer.problems
+
+
+def test_the_frozen_prompts_are_internally_consistent() -> None:
+    """Every recorded prompt hashes to the digest recorded beside it.
+
+    The prompts in the fixture were rendered by the v1.1 build, before untrusted values were wrapped
+    (R2-02, WS-02). They are a *record* of what that code sent, so the honest check is that the record
+    is self-consistent, not that it matches what today's renderer would produce - re-rendering it
+    without re-running the run would be a fabricated prompt, and re-running would change every pinned
+    id (rule 0.1.4). What the current renderer produces is pinned by
+    `tests/test_integration_vertical_slice.py::test_the_recorded_prompts_carry_the_banner_payload_inside_the_wrapper`.
+    """
+    rows = [
+        json.loads(line)
+        for line in (RECORDED_RUN / "replay.json").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows, "the frozen run recorded no replay trace"
+    checked = 0
+    for row in rows:
+        text = row.get("request_text")
+        if text is None:
+            continue
+        assert row["request_sha256"] == sha256_text(text), row["key"]
+        checked += 1
+    assert checked, "no model turn in the fixture carried its prompt, so nothing was checked"

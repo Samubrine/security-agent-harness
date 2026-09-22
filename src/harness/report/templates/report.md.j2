@@ -22,7 +22,11 @@
 {% if run.port_window %}
 - Provider calls are bounded to the ports the scope authorises ({{ run.port_window }}).
 {% endif %}
-- Untrusted text is data-only, wrapped in a per-run nonce; instruction-shaped payloads are reported as observations, not obeyed.
+{% if run.untrusted_blocks %}
+- Untrusted text reached these prompts as {{ run.untrusted_blocks }} nonce-delimited block(s). Inside one it is data: instruction-shaped payloads are reported as observations, never obeyed.
+{% else %}
+- No untrusted text reached this run's prompts, so the injection boundary was not exercised.
+{% endif %}
 - Commands are argv arrays built by the harness; there is no shell interpolation anywhere.
 - Every artifact is content-addressed, every evidence span is recomputable, and every event is hash-chained.
 {% if run.remote_egress %}
