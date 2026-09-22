@@ -164,18 +164,28 @@ def _bounded_digest(payload: Any, limit_chars: int) -> str:
     observations = [dict(entry) for entry in digest.get("observations") or ()]
     omitted_values = 0
     omitted_observations = 0
-    while observations and len(_canonical({**digest, "observations": observations})) > limit_chars:
-        index = next(
-            (i for i, entry in enumerate(observations) if entry.get("untrusted_value")), None
-        )
-        if index is None:
-            observations.pop()
-            omitted_observations += 1
+    # How much has to go, worked out by ratio rather than one entry at a time: a long run can carry
+    # hundreds of observations, and re-serialising the whole document per dropped value turns a
+    # bounded render into a quadratic one. The loop is then a correction pass, not the mechanism.
+    while observations:
+        over = len(_canonical({**digest, "observations": observations})) - limit_chars
+        if over <= 0:
+            break
+        with_value = [i for i, entry in enumerate(observations) if entry.get("untrusted_value")]
+        if with_value:
+            total = sum(len(_canonical(observations[i].get("untrusted_value"))) for i in with_value)
+            share = max(1, total // len(with_value))
+            drop = max(1, min(len(with_value), -(-over // share)))
+            for index in with_value[:drop]:
+                # Oldest first: the newest evidence is what a planner is asking about, and it is the
+                # values that carry the bytes.
+                observations[index] = {**observations[index], "untrusted_value": None}
+                omitted_values += 1
             continue
-        # Sorted by id and dropped from the front: the newest evidence is what a planner is asking
-        # about, and it is the values that carry the bytes.
-        observations[index] = {**observations[index], "untrusted_value": None}
-        omitted_values += 1
+        # Nothing left but the entries themselves.
+        drop = max(1, min(len(observations), -(-over // 80)))
+        del observations[:drop]
+        omitted_observations += drop
     digest["observations"] = observations
     digest["digest_budget"] = {
         "limit_chars": limit_chars,
