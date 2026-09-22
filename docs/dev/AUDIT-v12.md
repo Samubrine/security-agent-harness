@@ -344,6 +344,8 @@ for f in findings:
     print(f.title, f.severity, validate_finding(f, observations={o.id: o for o in parsed.observations}, store=store).ok)
 ```
 
+| 2026-09-23 | **Round complete.** WS-01 … WS-11 executed in the plan's order. Every ledger row carries a disposition: 46 rows, 33 CLOSED with the command that proves them, 11 DEFERRED with decision reference D27 (or D23), 1 KEPT AS-IS with its reason, and 1 documentation defect closed by correcting the prose. Suite: **702 collected, 0 failed, 52s** in the worktree and, as the portability check, **702 collected, 0 failed, 53s in a fresh clone with `core.autocrlf=true`** (POSIX was not available on this machine, so its half of the definition of done is stated as unverified rather than assumed). The frozen run was not regenerated: two of the plan's own steps assumed changes that the fixture's strict records make impossible (rule 0.1.4's removal claim and WS-02.7's prompt regeneration), and both are corrected in place with the evidence. |
+
 ## Appendix B — provenance of this document
 
 Produced by a read-only audit round on 2026-09-23 with six parallel auditing agents (policy, runtime, eval, context/memory, tests, providers/MCP) plus a direct sweep, over `main` @ `1275c14`. Every `[PROVEN]` row was reproduced by the author of this file, not taken from an agent's summary. The audit modified nothing in the repository; all scratch work was written outside the tree. `[REPORTED]` rows are the residue that could not be reproduced in the time available and are marked so that the next reader does not inherit them as facts.
