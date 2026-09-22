@@ -12,11 +12,48 @@ the report would be a claim rather than a proof. That is the failure this module
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from harness.artifacts import ArtifactStore
 from harness.models import Finding, Observation, ReplayRecord
 from harness.util import canonical_json, read_json, read_jsonl, sha256_text, utcnow
+
+
+def _final_segment(events: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The events belonging to the run whose state files are on disk.
+
+    Running into a directory that already holds a run appends a second ``RUN_STARTED`` to the chain
+    and overwrites the record files with the new run's state -- which is what the frozen evaluation
+    fixture looks like. Only the events after the last ``RUN_STARTED`` describe those files;
+    measuring them against an earlier segment would report every earlier attempt as missing.
+    """
+    start = 0
+    for index, row in enumerate(events):
+        if row.get("type") == "RUN_STARTED":
+            start = index
+    return list(events[start:])
+
+
+def _witnessed(segment: Sequence[dict[str, Any]], event_type: str, key: str) -> dict[str, dict[str, Any]]:
+    """Payloads of every ``event_type`` event in the segment, keyed by the record it names."""
+    out: dict[str, dict[str, Any]] = {}
+    for row in segment:
+        if row.get("type") != event_type:
+            continue
+        data = row.get("data")
+        if not isinstance(data, dict):
+            continue
+        record_id = data.get(key)
+        if isinstance(record_id, str) and record_id:
+            out[record_id] = data
+    return out
+
+
+def _string_list(value: Any) -> list[str]:
+    """A recorded list of strings, or nothing at all if the field is not one."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 class ReplayWriter:
@@ -80,21 +117,38 @@ class Replayer:
         run_meta = read_json(self.run_dir / "run.json") if (self.run_dir / "run.json").exists() else {}
         self.run_id = str(run_meta.get("run_id") or self.run_dir.name)
         self._observations: dict[str, Observation] = {}
-        for row in read_jsonl(self.run_dir / "observations.jsonl"):
-            try:
-                obs = Observation.model_validate(row)
-            except Exception as exc:  # noqa: BLE001
-                self.problems.append(f"unreadable observation {row.get('id')}: {exc}")
-                continue
-            self._observations[obs.id] = obs
+        self._recorded_observation_ids: set[str] = set()
         self._findings: list[Finding] = []
+        self._load_records()
+
+    def _load_records(self) -> None:
+        """Read the record files off disk. A row that will not reconstruct is reported, not raised.
+
+        Called from the constructor and again from :meth:`verify`, because verification has to
+        describe the bytes that are on disk now: a caller that edits ``observations.jsonl`` between
+        the two must not be held to an in-memory copy of the file it replaced.
+        """
+        self._observations = {}
+        self._recorded_observation_ids = set()
+        for row in read_jsonl(self.run_dir / "observations.jsonl"):
+            row_id = row.get("id") if isinstance(row, dict) else None
+            if isinstance(row_id, str):
+                self._recorded_observation_ids.add(row_id)
+            try:
+                observation = Observation.model_validate(row)
+            except Exception as exc:  # noqa: BLE001 - the row is the problem, not the reader
+                self.problems.append(f"unreadable observation {row_id}: {exc}")
+                continue
+            self._observations[observation.id] = observation
+        self._findings = []
         findings_path = self.run_dir / "findings.json"
         if findings_path.exists():
             for row in read_json(findings_path):
                 try:
                     self._findings.append(Finding.model_validate(row))
                 except Exception as exc:  # noqa: BLE001
-                    self.problems.append(f"unreadable finding {row.get('id')}: {exc}")
+                    row_id = row.get("id") if isinstance(row, dict) else None
+                    self.problems.append(f"unreadable finding {row_id}: {exc}")
 
     # -- accessors -------------------------------------------------------------------------
 
@@ -118,11 +172,20 @@ class Replayer:
         from harness.findings.validate import validate_finding
 
         self.problems = []
+        self._load_records()
         log = EventLog(self.run_dir / "events.jsonl", self.run_id)
         try:
             log.verify_chain()
         except Exception as exc:  # noqa: BLE001 - chain break is reported, not raised to the caller
             self.problems.append(f"event chain did not verify: {exc}")
+        # Reconciliation is attempted even after a chain break: a broken *link* does not stop the
+        # lines from parsing, and the record files are exactly what is being questioned.
+        try:
+            chain = log.raw_events()
+        except Exception as exc:  # noqa: BLE001
+            self.problems.append(f"the event log could not be re-read for reconciliation: {exc}")
+            chain = []
+        self._reconcile_records(chain)
 
         store = ArtifactStore(self.run_dir, self.run_id)
         for obs in self._observations.values():
@@ -161,6 +224,92 @@ class Replayer:
             self.problems.append("finding digests differ from the ones recorded in report.json")
 
         return not self.problems
+
+    # -- reconciliation against the chain ---------------------------------------------------
+
+    def _reconcile_records(self, chain: Sequence[dict[str, Any]]) -> None:
+        """Check the run's record files against the event chain (R2-31).
+
+        Re-hashing artifacts and re-validating findings are both checks on the *same files the run
+        wrote*: an ``observations.jsonl`` whose records were added, deleted or edited still verifies
+        clean as long as the spans it cites recompute from the artifacts. The chain is the
+        independent witness -- it is append-only and hash-linked, so a record that has no event
+        behind it is a record the run never produced.
+
+        What each direction can and cannot see, since the check is only worth its limits: an
+        observation that no ``OBSERVATION_ADDED`` event witnesses, or one whose kind, provider or
+        evidence differs from the event, is named here. Within one run segment the observation set
+        only grows, so the comparison is exact in both directions. The finding set does *not* only
+        grow -- a step re-derives it wholesale -- so a finding the chain witnessed and a later step
+        dropped is legitimate, and deletions are caught instead by the count the final
+        ``RUN_ENDED`` event records. Fields the chain does not carry (an observation's ``value``, a
+        finding's claims) cannot be reconciled here at all; they are covered by the span and
+        validator checks above.
+        """
+        segment = _final_segment(chain)
+        if not segment:
+            return
+        self._reconcile_observations(segment)
+        self._reconcile_findings(segment)
+
+    def _reconcile_observations(self, segment: Sequence[dict[str, Any]]) -> None:
+        witnessed = _witnessed(segment, "OBSERVATION_ADDED", "observation")
+        for observation in sorted(self._observations.values(), key=lambda o: o.id):
+            data = witnessed.get(observation.id)
+            if data is None:
+                self.problems.append(
+                    f"observations.jsonl records {observation.id}, which no OBSERVATION_ADDED event "
+                    f"in the final run segment witnesses"
+                )
+                continue
+            self._mismatch("observation", observation.id, "kind", observation.kind, data.get("kind"))
+            self._mismatch("observation", observation.id, "provider", observation.provider, data.get("provider"))
+            self._mismatch(
+                "observation",
+                observation.id,
+                "evidence",
+                sorted({ref.artifact for ref in observation.evidence}),
+                sorted(_string_list(data.get("evidence"))),
+            )
+        for observation_id in sorted(set(witnessed) - self._recorded_observation_ids):
+            self.problems.append(
+                f"the event chain witnesses observation {observation_id}, which observations.jsonl "
+                f"does not record"
+            )
+
+    def _reconcile_findings(self, segment: Sequence[dict[str, Any]]) -> None:
+        witnessed = _witnessed(segment, "FINDING_ADDED", "finding")
+        for finding in sorted(self._findings, key=lambda f: f.id):
+            data = witnessed.get(finding.id)
+            if data is None:
+                self.problems.append(
+                    f"findings.json records {finding.id}, which no FINDING_ADDED event in the final "
+                    f"run segment witnesses"
+                )
+                continue
+            self._mismatch("finding", finding.id, "title", finding.title, data.get("title"))
+            self._mismatch("finding", finding.id, "status", finding.status, data.get("status"))
+            self._mismatch(
+                "finding",
+                finding.id,
+                "cve",
+                sorted(finding.cve),
+                sorted(_string_list(data.get("cve"))),
+            )
+        ended = next((row for row in reversed(segment) if row.get("type") == "RUN_ENDED"), None)
+        expected = (ended or {}).get("data", {}).get("findings")
+        if isinstance(expected, int) and expected != len(self._findings):
+            self.problems.append(
+                f"the final RUN_ENDED event records {expected} findings, but findings.json records "
+                f"{len(self._findings)}"
+            )
+
+    def _mismatch(self, what: str, record_id: str, field: str, recorded: Any, witnessed: Any) -> None:
+        if recorded != witnessed:
+            self.problems.append(
+                f"{what} {record_id} was recorded with {field}={recorded!r}, but the event chain "
+                f"witnesses {field}={witnessed!r}"
+            )
 
     def report(self) -> dict[str, Any]:
         """A compact, machine-readable account of what replay was able to re-derive."""

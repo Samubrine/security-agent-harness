@@ -87,6 +87,17 @@ class EventLog:
                 raise EventChainError(f"event log line {lineno} is not a valid event record: {exc}") from exc
         return out
 
+    def raw_events(self) -> list[dict[str, Any]]:
+        """Every event line as parsed, with no schema applied and no link re-checked.
+
+        Reading state back from the log is not the same as *verifying* it: a caller that has to
+        report a record which disagrees with the chain needs the fields as they are on disk, and a
+        caller that compares the chain against the run's other files needs to see events whose
+        chain link is broken rather than nothing at all. Raises :class:`EventChainError` only when
+        a line cannot be parsed as a JSON object, which is already a chain failure.
+        """
+        return [raw for _, raw in self._raw_events()]
+
     @property
     def head_hash(self) -> str:
         """Hash of the last event, or ``""`` for an empty log (the genesis value)."""

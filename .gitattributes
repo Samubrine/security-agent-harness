@@ -1,0 +1,10 @@
+# Content-addressed bytes must survive a checkout unchanged.
+#
+# An artifact in this repository is filed under the SHA-256 of its own bytes, and the frozen
+# recorded run in `tests/fixtures/run/port_scan` is verified by re-hashing every one of them.
+# On a stock Windows checkout (`core.autocrlf=true`) git rewrites LF to CRLF in the worktree, so
+# the file no longer hashes to the name it is filed under and the harness reports its own frozen
+# run as tampered. `-text` disables EOL conversion for these paths in both directions, which is
+# the only setting that keeps a content address meaningful across checkouts.
+tests/fixtures/**/artifacts/**  -text
+eval/results/**                 -text
