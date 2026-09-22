@@ -141,6 +141,11 @@ feeds. `make eval` signs nothing and builds nothing, so run `make scope` once fi
 
 ## What is deliberately not implemented
 
+Before trusting an entry in this table, read `docs/dev/AUDIT-v12.md`: it re-verified every row
+below against `1275c14`, corrected the stated reason for two of them (the `http.probe` and
+independent-verification rows), and records a second round of findings — including four
+integrity defects — with the command that reproduces each one.
+
 | Absent | Why |
 |---|---|
 | v2 Token Optimizer | Decision D23 defers it until v1 traces exist to tune against. Provider-call telemetry is recorded so those traces exist. |

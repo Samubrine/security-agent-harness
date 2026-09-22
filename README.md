@@ -15,6 +15,10 @@ evaluation harness scores real runs against ground truth. See
 actually delivers. [docs/dev/AUDIT-v11.md](docs/dev/AUDIT-v11.md) audits the work that closed five
 of the gaps that check named, and [docs/dev/IMPLEMENTATION.md](docs/dev/IMPLEMENTATION.md) lists
 what is still absent - including the three items below that are wired but not yet reachable.
+[docs/dev/AUDIT-v12.md](docs/dev/AUDIT-v12.md) re-verifies all of that against `1275c14` and adds a
+second round of findings plus the implementation plan (`WS-01 … WS-11`) that closes them. Read it
+before starting work on anything in this repository: it names, per task, which claims to re-verify
+first.
 
 ```text
 595 tests passing (4.3s)
