@@ -11,7 +11,8 @@ from pathlib import Path
 
 from harness.llm.prompts import parse_agent_turn
 from harness.llm.schemas import agent_turn_schema, export_schemas
-from harness.models import AgentTurn
+from harness.models import AgentTurn, SkillSpec
+from harness.skills import list_skills
 
 
 def test_agent_turn_schema_describes_the_contract_the_parser_enforces() -> None:
@@ -69,3 +70,54 @@ def test_a_capability_proposal_has_no_field_for_a_target_or_provider() -> None:
         "hypothesis_id",
     }
     assert proposal.get("additionalProperties") is False
+
+
+#: Fields of a skill the runtime reads, and where. Keeping the list here rather than describing it in
+#: prose is the point: a field added to `SkillSpec` must be classified before the suite goes green,
+#: because the alternative is what the round-2 audit found - `independent_for`,
+#: `allow_second_provider_by_default` and `inputs` were declared by every skill and read by nothing
+#: (R2-24, K5), so a request for independent verification had no effect for a whole release.
+CONSUMED_SKILL_FIELDS = frozenset(
+    {
+        "name",  # the run manifest, the report, and the objective's skill pairing
+        "capabilities",  # the action catalogue
+        "verification",  # max_providers_per_need and independent_for, via the necessity gate
+        "budget_override",  # runner._budgets_for
+        "allow_second_provider_by_default",  # loop._corroboration_required
+        "inputs",  # runner._require_skill_inputs
+    }
+)
+
+#: Fields that are deliberately display-only: a human reads them in the skill file or the report, no
+#: code branches on them. Anything else about a skill has to be consumed by the runtime.
+DISPLAY_ONLY_SKILL_FIELDS = frozenset({"version", "description", "completion_criteria"})
+
+
+def test_every_skill_field_is_consumed_or_declared_display_only() -> None:
+    """A new skill setting with no consumer must fail here, not ship as dead configuration.
+
+    The failure message names the section to read, because "unexpected field" is not actionable and
+    the disposition is a decision (honour it, or delete it and say why) rather than a rename.
+    """
+    known = CONSUMED_SKILL_FIELDS | DISPLAY_ONLY_SKILL_FIELDS
+    declared = set(SkillSpec.model_fields)
+    unexplained = sorted(declared - known)
+    assert not unexplained, (
+        f"SkillSpec gains {unexplained} with no consumer and no stated disposition. Every skill "
+        "field must either be read by the runtime or be listed as display-only - see WS-07 and "
+        "decision D25 in docs/dev/AUDIT-v12.md."
+    )
+    stale = sorted(known - declared)
+    assert not stale, (
+        f"{stale} is classified but no longer declared on SkillSpec; remove it from the lists in "
+        "tests/test_schemas_contract.py so a future field cannot reuse the name unchecked."
+    )
+
+
+def test_the_consumed_skill_fields_are_the_ones_the_skill_files_use() -> None:
+    """The lists above describe the shipped skills, so a field only tests set would be a false pass."""
+    for skill in list_skills():
+        assert set(skill.model_fields_set) <= (CONSUMED_SKILL_FIELDS | DISPLAY_ONLY_SKILL_FIELDS), (
+            skill.name
+        )
+        assert skill.name and skill.capabilities, skill.name

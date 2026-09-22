@@ -344,6 +344,7 @@ class InvestigationLoop:
             "PLAN_PROPOSED",
             {"step": self.state.step, "plan": [p.model_dump(mode="json") for p in turn.plan]},
         )
+        self._record_hypotheses(turn.hypotheses)
         self.budgets.success()
         self.state.consecutive_failures = 0
 
@@ -351,6 +352,44 @@ class InvestigationLoop:
         if action.kind == "stop":
             return {"stop": True, "reason": action.reason}
         return {"stop": False, "proposal": action.proposal}
+
+    def _record_hypotheses(self, hypotheses: Sequence[str]) -> None:
+        """Keep what the model asserted, and give each statement an id a proposal can cite.
+
+        The prompt asks the model for hypotheses and the run used to drop them, which left design
+        D5's "the model may propose hypotheses only against existing ids" unimplementable: there were
+        no ids to reference and nothing recorded to check a reference against (R2-24). Ids are
+        assigned here rather than taken from the model, because a model-chosen id could collide with
+        another turn's or be reused to point at a statement it never made; the id's only job is to be
+        referenceable within this run. The statement is stored as prose the model wrote, which is
+        what it is - it is never promoted to a claim or a finding (D5).
+        """
+        for statement in hypotheses:
+            text = str(statement).strip()
+            if not text:
+                continue
+            entry = {"id": new_id("h"), "statement": text, "step": self.state.step}
+            self.state.hypotheses.append(entry)
+            self.events.append(
+                "HYPOTHESIS_RECORDED", {"hypothesis": entry["id"], "statement": text, "step": self.state.step}
+            )
+
+    def _hypothesis_reference_reason(self, proposal: CapabilityProposal) -> str | None:
+        """Why a proposal's hypothesis reference is not usable, or ``None`` when it is.
+
+        A reference to a hypothesis this run never recorded is refused rather than ignored: the field
+        exists so a call can be attributed to the question it was made for, and an unresolvable id
+        would make the attribution a fiction.
+        """
+        if not proposal.hypothesis_id:
+            return None
+        known = {str(entry["id"]) for entry in self.state.hypotheses}
+        if proposal.hypothesis_id in known:
+            return None
+        return (
+            f"hypothesis {proposal.hypothesis_id!r} was not recorded in this run; a proposal may "
+            "cite only a hypothesis the model already stated"
+        )
 
     def _failures_exhausted(self) -> bool:
         return self.state.consecutive_failures >= self.config.budgets.max_consecutive_failures
@@ -385,6 +424,8 @@ class InvestigationLoop:
             reason = (
                 f"grant {proposal.grant!r} is not offered for capability {proposal.capability!r}"
             )
+        else:
+            reason = self._hypothesis_reference_reason(proposal)
 
         if reason is None:
             try:
@@ -410,6 +451,30 @@ class InvestigationLoop:
 
     # -- necessity, policy, execution ------------------------------------------------------
 
+    def _corroboration_required(self, capability: str) -> bool:
+        """Whether this call must be corroborated by a second, independent source.
+
+        A skill asks for it in one of two ways, and v1.1 read neither: ``allow_second_provider_by_default``
+        asks on behalf of every need the skill has, and ``verification.independent_for`` names the
+        conclusions that must not rest on a single source. Entries there are written
+        ``<skill>.<conclusion>`` (see ``src/harness/skills/entry_point.yaml``), so the test is that the
+        skill's own name appears before the dot - the structural reading of "this skill's conclusions
+        need corroboration".
+
+        Only asked where corroboration is *possible*: with one eligible provider the gate would
+        refuse the call outright, which would trade stronger evidence for less evidence. A capability
+        with a single source runs on that source, and the decision record says so.
+
+        This is also what makes the conflict-driven re-planning behind the gate reachable by a real
+        run (K3): a conflict needs two providers answering the same question, and before this the only
+        way to get two was a coverage gap that the shipped providers do not produce.
+        """
+        skill = self.context.skill
+        asked = skill.allow_second_provider_by_default or any(
+            entry.split(".", 1)[0] == skill.name for entry in skill.verification.independent_for
+        )
+        return asked and len(self.registry.by_capability(capability)) >= 2
+
     def _pursue(self, proposal: CapabilityProposal, catalogue: Mapping[str, Any]) -> bool:
         self._goto(State.NECESSITY)
         decision = self.gate.decide(
@@ -420,6 +485,7 @@ class InvestigationLoop:
             cache=self.state.cache,
             failed_providers=self.state.failed_providers,
             conflicts=self.state.correlations,
+            trust_diversity_required=self._corroboration_required(proposal.capability),
         )
         self.state.decisions.append(decision)
         self.events.append(
@@ -464,11 +530,13 @@ class InvestigationLoop:
             )
 
         any_executed = False
-        for provider_id in decision.selected:
-            if self._run_provider(provider_id, proposal, decision):
+        for provider in self.router.resolve(decision):
+            if self._run_provider(provider, proposal, decision):
                 any_executed = True
         self._goto(State.FINDINGS)
-        return any_executed or True
+        # Reports what happened rather than a constant: with nothing executed there is nothing new
+        # to derive, and the caller's next move is to ask the model again with the failure recorded.
+        return any_executed
 
     # -- scheduled re-planning on conflict --------------------------------------------------
 
@@ -531,9 +599,16 @@ class InvestigationLoop:
         return self._pursue(proposal, catalogue)
 
     def _run_provider(
-        self, provider_id: str, proposal: CapabilityProposal, decision: ProviderDecision
+        self, provider: Any, proposal: CapabilityProposal, decision: ProviderDecision
     ) -> bool:
-        provider = self.registry.get(provider_id)
+        """Execute one selected provider.
+
+        The provider arrives resolved rather than by id: `Router.resolve` is the step that re-checks
+        a decision's selection against the registry before anything runs (the decision is a record
+        that may have been replayed from disk), so looking the provider up again here would throw
+        that check away (R2-25).
+        """
+        provider_id = provider.spec.id
         spec = provider.spec
 
         self._goto(State.POLICY)
@@ -626,6 +701,11 @@ class InvestigationLoop:
             execution_id=request.execution_id,
             taint="T3" if provider_id.startswith("mcp:") else "T2",
         )
+        # The store enforces the byte ceiling itself, but it does not report what it spent, so
+        # without this the guard's counter stays at zero and every recorded budget snapshot claims
+        # no artifact bytes were used - a number a report renders as fact (R2-24). Same `Budget`
+        # value, so the two cannot disagree about the limit.
+        self.budgets.add_artifact_bytes(metadata.byte_length)
         execution = ProviderExecution(
             id=request.execution_id,
             run_id=self.config.run_id,
@@ -645,6 +725,10 @@ class InvestigationLoop:
             artifacts=[metadata.digest],
         )
         self.state.executions.append(execution)
+        # The reverse link from a policy decision to the execution it authorised. The field existed
+        # and the run audit read it, but nothing ever wrote it, so the audit's "these two must name
+        # each other" check could only ever compare two Nones (R2-24).
+        policy_decision.execution_id = execution.id
         self.provenance.add(execution.id, "produced", metadata.digest, provider=provider_id)
         self.events.append(
             "ARTIFACT_CREATED",
@@ -690,7 +774,6 @@ class InvestigationLoop:
         # from "nobody has tried yet", which is the difference between a real coverage gap and the
         # first call for a need.
         self.state.cache[cache_key(provider_id, proposal.capability)] = result
-        self.state.cache[provider_id] = result
         self._attempts.append(
             {
                 "capability": proposal.capability,

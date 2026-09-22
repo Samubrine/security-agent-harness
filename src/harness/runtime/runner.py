@@ -21,7 +21,7 @@ from harness.events import EventLog
 from harness.llm.client import build_client
 from harness.memory.index import LongTermIndex
 from harness.memory.manager import MemoryManager
-from harness.models import Budget, RunConfig, RunSummary
+from harness.models import Budget, RunConfig, RunSummary, SkillSpec
 from harness.parsers.registry import ParserRegistry
 from harness.policy.engine import AutoApproveGate, AutoDenyGate, PolicyEngine, RecordingGate
 from harness.policy.egress import assess_provider_egress, require_permitted
@@ -107,6 +107,44 @@ def _approval_gate(mode: str, answers: tuple[bool, ...]) -> Any:
     if mode == "scripted":
         return RecordingGate(list(answers))
     raise ConfigError(f"unknown approval mode {mode!r}; expected deny, approve or scripted")
+
+
+#: How a skill's declared input type maps onto the resource kind a grant is minted over. The design
+#: (02 §13) has skills ask for a `scope_target` or a `scope_fs_target`; the scope record speaks about
+#: resources. This table is the translation between the two vocabularies.
+INPUT_RESOURCE_KINDS: dict[str, str] = {"scope_target": "net", "scope_fs_target": "fs"}
+
+
+def _require_skill_inputs(skill: SkillSpec, grants: GrantBook) -> None:
+    """Refuse a run whose skill needs something the authorised scope cannot supply.
+
+    Every skill declares `inputs` and nothing read it (R2-24): a log-analysis run pointed at a
+    network-only scope started, spent model turns and finished with a report that said the corpus was
+    empty. A declaration is worth something only if the runtime checks it, and the place to check it
+    is here - with the other authorisation failures, before the model is consulted. An unknown input
+    type is a configuration error rather than a silently ignored field: a typo in a skill file would
+    otherwise disable exactly the check the skill asked for.
+    """
+    available = {grant.kind for grant in grants.grants}
+    missing: list[str] = []
+    for name, declared in sorted(skill.inputs.items()):
+        shape = declared if isinstance(declared, dict) else {}
+        if not shape.get("required"):
+            continue
+        declared_type = str(shape.get("type") or "")
+        kind = INPUT_RESOURCE_KINDS.get(declared_type)
+        if kind is None:
+            raise ConfigError(
+                f"skill {skill.name!r} declares input {name!r} of unknown type {declared_type!r}; "
+                f"known types: {', '.join(sorted(INPUT_RESOURCE_KINDS))}"
+            )
+        if kind not in available:
+            missing.append(f"{name} ({declared_type})")
+    if missing:
+        raise ConfigError(
+            f"skill {skill.name!r} requires {', '.join(missing)}, and no grant in the authorised "
+            f"scope provides one; this run can reach: {', '.join(sorted(available)) or 'nothing'}"
+        )
 
 
 def _register_parsers(parsers: ParserRegistry) -> None:
@@ -265,6 +303,7 @@ def execute_run(request: RunRequest) -> RunArtifacts:
                 f"authorised aliases: {resolved.aliases()}"
             )
         resolved.grants = GrantBook(filtered)
+    _require_skill_inputs(resolved.skill, resolved.grants)
     # Compose the logical capability vocabulary onto the minted grants. The scope record speaks
     # about resources; skills speak about operations; this is the one place that says which
     # operation a resource kind can serve.

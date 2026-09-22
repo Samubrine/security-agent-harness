@@ -205,7 +205,6 @@ class SkillSpec(_Frozen):
     name: str
     version: str
     description: str = ""
-    objective_template: str = ""
     inputs: dict[str, Any] = Field(default_factory=dict)
     capabilities: list[str]
     completion_criteria: list[str] = Field(default_factory=list)

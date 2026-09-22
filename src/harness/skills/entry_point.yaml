@@ -1,10 +1,12 @@
 name: entry_point
 version: 0.2.0
 description: Correlate scan and log evidence into one supported attack-entry-point hypothesis.
-objective_template: "Correlate scan and log evidence into a supported entry-point hypothesis for {target}."
 inputs:
   target:
     type: scope_target
+    required: true
+  corpus:
+    type: scope_fs_target
     required: true
 capabilities:
   - service.enumerate

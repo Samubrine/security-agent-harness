@@ -1,7 +1,6 @@
 name: log_analysis
 version: 0.2.0
 description: Detect suspicious authentication and HTTP activity in a bounded log corpus.
-objective_template: "Detect suspicious authentication and HTTP activity in {target} logs."
 inputs:
   target:
     type: scope_fs_target

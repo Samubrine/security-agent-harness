@@ -371,12 +371,14 @@ class NecessityGate:
         This is the honest definition of a coverage gap available to a deterministic gate: not a
         guess about what a provider might fail to return, but the recorded fact that one ran and the
         evidence set is still incomplete.
+
+        The lookup is the exact ``cache_key(provider, capability)`` and nothing else. An earlier
+        version also matched a bare provider id, which is what the run's cache holds when it records
+        a completion without its capability - so a provider that had answered *this* capability could
+        make a different capability look like it had already run, and the gate would expand for a
+        coverage gap that did not exist (R2-29).
         """
-        ran = [
-            pid
-            for pid in (spec.id for spec in viable)
-            if cache_key(pid, capability) in cache or pid in cache
-        ]
+        ran = [pid for pid in (spec.id for spec in viable) if cache_key(pid, capability) in cache]
         if not ran:
             return None
         required = CAPABILITY_OUTPUT_KINDS.get(capability) or set()

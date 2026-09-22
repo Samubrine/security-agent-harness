@@ -89,6 +89,11 @@ class RunState:
     #: Per-provider-call telemetry, recorded so the v2 Token Optimizer can be evaluated against
     #: measured traces instead of an architectural guess (design 08 section 9).
     telemetry: list[ProviderCallTelemetry] = field(default_factory=list)
+    #: Hypotheses the model stated, as prose with a run-local id. Design D5 lets the model narrate and
+    #: propose hypotheses, and `CapabilityProposal.hypothesis_id` is how a call is attributed to the
+    #: question it was made for; before v1.2 the statements were parsed and dropped, so there was
+    #: nothing to attribute a call to (R2-24).
+    hypotheses: list[dict[str, Any]] = field(default_factory=list)
     #: Evidence needs a conflict created on its own, without a model turn. Kept so the report can
     #: show that a second call was driven by a detected disagreement rather than by the planner.
     follow_ups: list[FollowUpNeed] = field(default_factory=list)

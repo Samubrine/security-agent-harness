@@ -35,6 +35,11 @@ def _observations(run_dir: Path) -> dict[str, dict]:
     return {row["id"]: row for row in rows}
 
 
+def _events(run_dir: Path, event_type: str) -> list[dict]:
+    rows = [json.loads(line) for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [row for row in rows if row["type"] == event_type]
+
+
 def _findings(run_dir: Path) -> list[dict]:
     return json.loads((run_dir / "findings.json").read_text(encoding="utf-8"))
 
@@ -73,6 +78,38 @@ def test_the_hypothesis_survives_replay(entry_run) -> None:
     _, run_dir = entry_run
     replayer = Replayer(run_dir)
     assert replayer.verify() is True, replayer.problems
+
+
+def test_the_skills_request_for_corroboration_reaches_the_gate(entry_run) -> None:
+    """`verification.independent_for` is read, not decoration.
+
+    The skill asks for it, the gate has a `trust_diversity_required` parameter for exactly this
+    answer, and until WS-07 nothing passed one to the other - so the gate's second-provider path was
+    unreachable and the skill's request had no effect whatsoever (K3, K5, R2-24).
+    """
+    _, run_dir = entry_run
+    expansions = _events(run_dir, "PROVIDER_EXPANSION")
+    assert expansions, "the skill asked for corroboration and no call was expanded"
+    assert [row["data"]["expansion_reason"] for row in expansions] == ["trust_diversity"]
+    # Two sources, and the capability that has two of them: entry_point's other capabilities are
+    # served by a single provider each, and a demand for corroboration there would have refused a
+    # call rather than strengthened it.
+    assert expansions[0]["data"]["capability"] == "service.enumerate"
+    assert len(expansions[0]["data"]["selected"]) == 2
+
+
+def test_a_skill_that_does_not_ask_for_corroboration_is_unchanged(lab_environment) -> None:
+    """The negative control: port_scan declares `independent_for: []` and asks for nothing."""
+    artifacts = execute_run(
+        lab_environment.request(
+            objective="Enumerate exposed services on lab-web-01.",
+            skill="port_scan",
+            target_alias="lab-web-01",
+            run_id="run-scenario-entry-single",
+        )
+    )
+    assert _events(artifacts.run_dir, "PROVIDER_EXPANSION") == []
+    assert artifacts.summary.provider_calls > 0, "a run that called nothing proves nothing here"
 
 
 def test_an_uncorroborated_run_produces_no_hypothesis(lab_environment) -> None:

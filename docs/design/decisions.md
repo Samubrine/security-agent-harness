@@ -121,6 +121,28 @@ exist.
 **Accepted.** `replay` reconstructs state from recorded model/provider responses and artifacts,
 with no live network execution. `rerun` starts a fresh investigation and may differ.
 
+## D25 — Every declared field has a consumer, or a stated reason it does not (v1.2)
+**Accepted.** The round-2 audit found eight settings and records the code writes and nothing reads
+(`docs/dev/AUDIT-v12.md` R2-24, R2-25, R2-29). A field that nothing consumes is a promise the harness
+does not keep: a reader takes it as a control that exists. Each was therefore honoured or removed,
+with the disposition recorded here and enforced by
+`tests/test_schemas_contract.py::test_every_skill_field_is_consumed_or_declared_display_only`.
+
+| Field | Disposition | Where it is read now |
+|---|---|---|
+| `SkillVerification.independent_for` | **honoured** | `InvestigationLoop._corroboration_required` asks the gate for a second, independent source for a skill whose conclusions the entry names. This is also what makes the gate's second-provider path and the conflict-driven re-planning behind it reachable by a real run (K3, K5); O5's question about *mandating* diversity for specific finding classes stays open. |
+| `SkillSpec.allow_second_provider_by_default` | **honoured** | Same helper: it is the skill-wide form of the same request. Applied only where a second provider exists, because demanding corroboration from a capability with one provider would make the gate refuse a call rather than strengthen it. |
+| `SkillSpec.inputs` | **honoured** | `runner._require_skill_inputs` refuses a run whose required input kind no grant in the authorised scope provides, with the other authorisation failures and before the model is called. `entry_point` now declares the log corpus it also needs. |
+| `SkillSpec.objective_template` | **deleted** | The objective is supplied by the caller and recorded in the run manifest; nothing rendered the template, and design 02 §13's skill contract does not include it. A template that no code reads drifts silently from the command lines people actually type. |
+| `AgentTurn.hypotheses` | **honoured** | `InvestigationLoop._record_hypotheses` records each statement with a run-local id and emits `HYPOTHESIS_RECORDED`. The statement stays model prose and is never promoted to a claim (D5). |
+| `CapabilityProposal.hypothesis_id` | **honoured** | `InvestigationLoop._hypothesis_reference_reason` refuses a proposal that cites a hypothesis this run never recorded. Design 02 §5 and D5 both require the field; the model-facing half — ids in the turn's `hypotheses` list, so a conforming planner can cite one — lands with the single prompt regeneration in WS-02.7, because it changes every recorded prompt digest. |
+| `PolicyDecision.execution_id` | **honoured** | The loop fills it when the execution is created, so `harness.runtime.verify`'s check that a decision and an execution name each other has something to compare instead of two `None`s. |
+| `Router` | **honoured** | `InvestigationLoop._pursue` executes through `Router.resolve`, which re-checks a decision's selection against the registry at the execution boundary. The decision is a record that may have been replayed or edited, and looking the provider up again in the loop threw that check away. |
+| artifact-byte counter (`BudgetGuard.add_artifact_bytes`, recorded in `budget_snapshot`) | **honoured** | The loop charges each stored artifact's length to the guard, so the recorded snapshot states a real byte count instead of the constant zero a report renders as fact. The `ArtifactStore` remains the component that enforces the ceiling. |
+| necessity cache bare-provider-id key | **deleted** | `_coverage_gap` matches only `cache_key(provider, capability)`, and the loop no longer writes a key nothing read. The bare id made a completion for one capability look like a completion for another (R2-29). |
+| `Observation.freshness` | **deferred** | It is a recorded field, not a setting: an operator cannot set it and no decision should rest on a timestamp that is, for every shipped parser, the time the observation was recorded. Deleting it requires editing the frozen fixture, whose rows carry it and which is validated with `extra="forbid"`; §0.1.4 forbids that outside a deliberate re-record. Decision: delete it in the next deliberate re-record, not before. |
+| `ProviderExecution.nondeterminism` | **deferred** | Same reason, plus a second one: the value echoes the *provider's* declaration about itself, and invariant 12 says the harness must judge by the transport it chose (`egress.json` already records that judgement). It is redundant with a record that is trusted, so it should go the same way as `freshness` — at the next deliberate re-record. |
+
 ## Open questions
 
 | # | Question | Blocking? | Resolution point |

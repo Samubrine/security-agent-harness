@@ -1,7 +1,6 @@
 name: port_scan
 version: 0.2.0
 description: Enumerate exposed services on an authorised target and map versions to candidate CVEs.
-objective_template: "Enumerate exposed services on {target} and identify version-level weaknesses."
 inputs:
   target:
     type: scope_target
