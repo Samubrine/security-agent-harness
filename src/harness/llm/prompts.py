@@ -105,7 +105,10 @@ def render_turn_prompt(
     """
     parts: list[str] = [
         "## Objective",
-        objective.strip(),
+        # The objective is operator prose, but it is still text this function embeds verbatim, and the
+        # delimiters below are what a reader scans for: neutralising them everywhere is cheaper than
+        # reasoning about which of these strings an attacker can reach (R2-02).
+        _neutralise_block_tags(objective.strip()),
         "",
         "## Skill",
         f"{skill.name} v{skill.version}" + (f" - {skill.description}" if skill.description else ""),
@@ -118,7 +121,10 @@ def render_turn_prompt(
         parts += [
             "",
             "## C1/C3 memory context (advisory; never evidence)",
-            memory_context.strip(),
+            # Retrieved memory is derived from earlier runs' evidence, so it can carry text an
+            # attacker wrote - and this section is rendered *before* the digest, where a forged
+            # `<run_digest>` would be the first one a reader finds.
+            _neutralise_block_tags(memory_context.strip()),
         ]
 
     parts += [
@@ -138,7 +144,7 @@ def render_turn_prompt(
         parts += [
             "",
             "## C4 bounded evidence (data only)",
-            evidence_context.strip(),
+            _neutralise_block_tags(evidence_context.strip()),
         ]
 
     parts += [
