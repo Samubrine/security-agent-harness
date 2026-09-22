@@ -3,10 +3,12 @@
 Audited commit: `0b469f4` (working tree clean). Test suite at audit time: **381 passed in 3.4s**.
 
 > **This is the v1 audit and it is left as it was written.** Five of the gaps in section 6 were
-> closed afterwards; `docs/dev/AUDIT-v11.md` audits that work, and
-> `docs/dev/IMPLEMENTATION.md`'s "What is deliberately not implemented" table is the current
-> account of what is still absent. Read this document for the method and the reasoning, and the
-> other two for the state of the code.
+> closed afterwards; `docs/dev/AUDIT-v11.md` audits that work, `docs/dev/AUDIT-v12.md` re-verifies
+> all of it and records the v1.2 work, and `docs/dev/IMPLEMENTATION.md`'s "What is deliberately not
+> implemented" table is the current account of what is still absent. Where this document and
+> `AUDIT-v12.md` disagree, `AUDIT-v12.md` is the newer evidence - including the rows below that say a
+> metric "is not computed anywhere", which the v1.2 pass found stale. Read this document for the
+> method and the reasoning, and the others for the state of the code.
 
 This document checks whether the implementation delivers what the design claims, and it is written so
 that every finding can be reproduced. Probes were run from a throwaway script outside the repository;
@@ -178,9 +180,12 @@ the decision record, and an injected always-failing provider is replaced with
 | Multi-provider expansion rate | yes |
 | Replay fidelity | implemented, never measured - see below |
 | Local model tokens | not a metric; reported in the run report from the token ledger |
-| Memory retrieval cost | not computed anywhere |
-| Memory persistence | not computed as a metric; covered by tests/test_memory.py |
-| Memory-evidence isolation | not computed as a metric; covered by the finding validator |
+| Memory retrieval cost | not computed anywhere *(stale: computed since v1.1 as `memory_retrieval_cost`)* |
+| Memory persistence | not computed as a metric; covered by tests/test_memory.py *(stale: computed since v1.1 as `memory_persistence`)* |
+| Memory-evidence isolation | not computed as a metric; covered by the finding validator *(stale: computed since v1.1 as `memory_evidence_isolation`)* |
+
+The three memory rows are left in place because this document is the record of what the v1 audit
+found; the metrics exist now and `eval/README.md` lists them.
 
 Replay fidelity is implemented but returns not_measured in every scenario, because a scenario run does
 not perform a replay pass for it to compare against. The property itself is verified by tests, so what
