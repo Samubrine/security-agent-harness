@@ -39,6 +39,7 @@ from harness.models import (
     ProviderDecision,
     ProviderExecution,
     RunConfig,
+    RunStatus,
     RunSummary,
 )
 from harness.providers.base import ProviderRequest, ProviderResult
@@ -161,6 +162,10 @@ class InvestigationLoop:
         #: would detect the same unresolved conflict on the next pass and ask for the same
         #: expansion forever; one resolving call per capability is the ceiling.
         self._follow_ups_attempted: set[str] = set()
+        #: Why the run is ending, recorded where the reason is decided (see `_end_run`). Left unset
+        #: by a run that ends because the investigation finished, which is what makes the summary
+        #: status a fact about the run rather than a constant written next to a stop reason.
+        self._outcome: str | None = None
 
     # -- public entry point ----------------------------------------------------------------
 
@@ -170,15 +175,36 @@ class InvestigationLoop:
             self._planning_cycle()
         except BudgetExhausted as exc:
             self._goto(State.TERMINATING)
-            self.state.stop_reason = str(exc)
-            self.events.append("RUN_BUDGET_EXHAUSTED", {"reason": str(exc)})
+            self._end_run("budget_exhausted", str(exc), "RUN_BUDGET_EXHAUSTED")
         except HarnessError as exc:
             self._goto(State.TERMINATING)
-            self.state.stop_reason = f"harness error: {exc}"
-            self.events.append("RUN_FAILED", {"reason": str(exc), "type": type(exc).__name__})
+            self._end_run(
+                "failed",
+                f"harness error: {exc}",
+                "RUN_FAILED",
+                error_type=type(exc).__name__,
+            )
 
         self._finalise()
         return self.state
+
+    def _end_run(
+        self, status: RunStatus, stop_reason: str, event: str, *, error_type: str | None = None
+    ) -> None:
+        """Record why the run is ending, in one place, so the status cannot disagree with the log.
+
+        The status is written where the cause is known instead of being inferred from the stop text
+        afterwards. A budget-exhausted run and a run whose model died used to be finalised as
+        `status="completed"` with a stop reason beside them, which is how memory curation -- which
+        promotes lessons from runs that did *not* fail (`memory/curator.py`) -- could treat an
+        abandoned investigation as a finished one. `status` is one of `RunSummary`'s vocabulary.
+        """
+        self.state.stop_reason = stop_reason
+        self._outcome = status
+        data: dict[str, Any] = {"reason": stop_reason}
+        if error_type is not None:
+            data["type"] = error_type
+        self.events.append(event, data)
 
     # -- the cycle -------------------------------------------------------------------------
 
@@ -194,9 +220,7 @@ class InvestigationLoop:
 
             catalogue = self.build_catalogue()
             if not catalogue["capabilities"]:
-                self.state.stop_reason = (
-                    "no capability in this skill has both a registered provider and a grant"
-                )
+                self.state.stop_reason = self._nothing_left_to_ask()
                 break
 
             # A conflict schedules its own resolving call, before the model is asked. The need is
@@ -279,8 +303,12 @@ class InvestigationLoop:
         try:
             response = self.model.complete(system=bundle.system, user=bundle.user, step=self.state.step)
         except ModelClientError as exc:
-            self.state.stop_reason = f"model client failed: {exc}"
-            self.events.append("RUN_FAILED", {"reason": str(exc), "type": "ModelClientError"})
+            self._end_run(
+                "failed",
+                f"model client failed: {exc}",
+                "RUN_FAILED",
+                error_type="ModelClientError",
+            )
             return None
 
         self.budgets.add_tokens(0, response.output_tokens)
@@ -1091,10 +1119,44 @@ class InvestigationLoop:
                 },
             )
 
+    def _nothing_left_to_ask(self) -> str:
+        """Why the catalogue is empty. The two causes are different and only one is about authority.
+
+        A capability disappears from the catalogue when it has no registered provider with a grant
+        *or* when it was denied. Reporting the first cause for a run that ended because authority
+        refused every call would be the record telling the reader something that is not true, which
+        is the failure this whole file exists to avoid (see `docs/dev/AUDIT-v12.md` R1-10).
+        """
+        denied = sorted(
+            {str(item["capability"]) for item in self.state.rejected_proposals if item.get("denied")}
+        )
+        if denied:
+            return (
+                f"no capability is left: {', '.join(denied)} was denied, and nothing else in this "
+                f"skill has both a registered provider and a grant"
+            )
+        return "no capability in this skill has both a registered provider and a grant"
+
+    def _terminal_status(self) -> RunStatus:
+        """Why the run ended, in the vocabulary ``RunSummary.status`` is typed on.
+
+        A run that recorded no failure of its own and executed nothing because authority refused
+        every call it made did not complete an investigation: it was denied one. A dry run is not
+        that case -- its proposals are marked denied by the harness itself, since rendering the plan
+        without executing it is exactly what the operator asked for.
+        """
+        if self._outcome is not None:
+            return self._outcome
+        if not self.config.dry_run and not self.state.executions:
+            if any(item.get("denied") for item in self.state.rejected_proposals):
+                return "denied"
+        return "completed"
+
     def _finalise(self) -> None:
+        status = self._terminal_status()
         summary = RunSummary(
             run_id=self.config.run_id,
-            status="completed",
+            status=status,
             steps=self.state.step,
             provider_calls=len(self.state.executions),
             findings=len(self.state.findings),

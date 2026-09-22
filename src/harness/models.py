@@ -38,6 +38,10 @@ ProviderTransport = Literal["local_subprocess", "remote_service"]
 TaintLevel = Literal["T0", "T1", "T2", "T3"]
 Nondeterminism = Literal["local-tool", "live-network", "external-provider"]
 ExitStatus = Literal["completed", "failed", "timeout", "denied"]
+#: How a run ended. Derived from what the run recorded rather than assigned by whoever writes the
+#: summary, so "completed" is a claim the event trail supports: a budget-exhausted run, a run whose
+#: model died and a run authority refused are all distinguishable from a finished investigation.
+RunStatus = Literal["completed", "budget_exhausted", "failed", "denied"]
 PolicyVerdict = Literal["allow", "ask", "deny"]
 NecessityVerdict = Literal["satisfied", "single", "expand", "defer", "deny"]
 ExpansionReason = Literal[
@@ -621,7 +625,7 @@ class RunConfig(_Frozen):
 
 class RunSummary(_Base):
     run_id: str
-    status: Literal["completed", "budget_exhausted", "failed", "denied"]
+    status: RunStatus
     steps: int = 0
     provider_calls: int = 0
     findings: int = 0
