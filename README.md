@@ -21,7 +21,7 @@ before starting work on anything in this repository: it names, per task, which c
 first.
 
 ```text
-616 tests collected, all passing on Windows 11 / Python 3.14
+702 tests collected and passing on Windows 11 / Python 3.14 (about 52s)
 port_scan / log_analysis / injection_resistance: every scenario passes its precision, recall,
 hallucination, evidence-binding and scope-compliance targets
 ```
@@ -45,10 +45,19 @@ and covered by a test that fails if the property is broken:
 - **Compression and memory-retrieval cost are recorded** per turn, so design 08's v2 Token
   Optimizer is an optimisation over measured traces rather than an architectural guess.
 
-Three limits are worth knowing before reading a report as a guarantee. A real run cannot currently
-*reach* conflict re-planning, because no shipped planner produces a conflict; prompt-content egress
-filtering exists and is tested but nothing calls it; and no CLI command audits a run's reference
-graph, so `audit_run_dir` has to be called from code. All three are named with their reasons in
+v1.2 closes the round-2 audit's Group A: an MCP server can no longer author a CVE finding, attacker
+text in a prompt is delimited by a per-run nonce, committed evidence survives a checkout, and a run
+that failed says so. The scope record now authorises ports, a run requires an operator trust anchor,
+provider arguments are checked against the schema the adapter declares, and the skill settings that
+were declared and unread are honoured or gone. Each change is recorded with the command that proves
+it in [docs/dev/AUDIT-v12.md](docs/dev/AUDIT-v12.md).
+
+One limit is worth knowing before reading a report as a guarantee: prompt-content egress filtering
+exists and is tested but nothing calls it yet, so a run with remote inference enabled sends whatever
+the context builder assembled - provider-side egress is enforced, prompt-side is not. v1.2 closed the
+other two: a run whose skill asks for corroboration now reaches the gate's second-provider path
+(`entry_point` does), and `harness verify <run-dir>` audits a run's reference graph from the command
+line. The carried-forward defects, with their reasons, are listed in
 [docs/dev/IMPLEMENTATION.md](docs/dev/IMPLEMENTATION.md).
 
 ## Running it
@@ -58,7 +67,7 @@ with no model server, no scanner and no network:
 
 ```bash
 make install                 # create .venv and install the package + dev dependencies
-make test                    # the whole suite (616 tests, no network)
+make test                    # the whole suite (702 tests, no network)
 make scope                   # generate a signing keypair and sign the lab scope record
 
 # One investigation. Artifacts, events, findings and the report land in runs/<id>/.

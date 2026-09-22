@@ -176,6 +176,20 @@ means:
   guessing at it. A schema keyword nothing checks would be worse than none: it would let a provider
   author believe a constraint that is not there.
 
+## D27 — What v1.2 does not close, and why
+**Accepted.** The round-2 audit's ledger has rows that no v1.2 workstream owns. Recording them here
+is what makes them *deferred* rather than forgotten, and it keeps the "deliberately not implemented"
+table in `docs/dev/IMPLEMENTATION.md` for decisions rather than defects.
+
+| Row | Disposition |
+|---|---|
+| K1 — prompt-content egress filtering is dead code | **Deferred.** `classify_prompt_content`/`redact_for_egress` exist and are tested; wiring them changes every prompt a remote run sends, and the v1.2 round had no way to measure that against a recorded run. The next step is a change that records what was redacted per turn (the ledger already records per-turn tiers), so the cost of redaction is visible rather than asserted. |
+| K4 — v2 Token Optimizer absent | **Deferred by D23**, which is where it belongs. |
+| K6 — `memory_persistence` measures attribution, not the byte cap | **Kept as-is.** The metric measures what it can see from the run directory (every promoted entry names its source run); the cap is enforced and tested by `MemoryManager`. Renaming the metric would break the design's table, so the limitation is stated in its docstring and in the ledger instead. |
+| K7 — no active verification | **Deliberate** (design 00 section 5). Its stated reason in `IMPLEMENTATION.md` was wrong and is corrected: the grants do serve `http.probe`; the nmap adapter advertises and then excludes it. |
+| K8, K9 — no live lab run, no third-party MCP server | **Environmental.** Neither was available on the machine this was built on; both are stated where they are measured. |
+| R2-26, R2-28, R2-30, R2-30b | **Deferred**, listed as carried-forward defects in `IMPLEMENTATION.md`: inert curator inputs, an unbounded read in `logfile`, two tests that cannot fail as written, and two loose scenario assertions. |
+
 ## Open questions
 
 | # | Question | Blocking? | Resolution point |

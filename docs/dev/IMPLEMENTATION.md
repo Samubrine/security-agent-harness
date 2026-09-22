@@ -80,7 +80,11 @@ Two consequences, both of which the tests rely on:
 * adding a provider for an existing logical capability is a registration change and nothing else - no
   binding edit, no planner edit, no policy edit;
 * a logical capability that no grant can serve is absent from the catalogue, so the model cannot ask
-  for it at all. That is why `http.probe` appears in no run: no grant serves it.
+  for it at all. That is *not* why `http.probe` appears in no run: the lab scope's grants do carry
+  `http.probe` for `lab-web-01`, and the reason no call is ever planned is on the provider side - the
+  `nmap` adapter advertises the capability so the provider model records that it exists and then
+  excludes it (`native/nmap.py`), because nmap does not probe HTTP semantics, and no other adapter
+  declares it. The catalogue offers `http.probe` on the grants that have it; nothing can serve it.
 
 ## Recipes
 
@@ -150,6 +154,18 @@ Add a JSON file to `eval/scenarios/` and, if it needs new expectations, an entry
 expectation that does not exist, if an expectation no scenario claims, or if a metric no scenario
 feeds. `make eval` signs nothing and builds nothing, so run `make scope` once first.
 
+### Known defects carried forward
+
+These are defects, not decisions: the table above is for things this build deliberately does not do.
+D27 in `docs/design/decisions.md` records why each is deferred and what would close it.
+
+| Defect | Why it is still open |
+|---|---|
+| Prompt-content egress filtering is dead code | `policy/egress.py` provides `classify_prompt_content` and `redact_for_egress` and they are tested, but nothing calls them, so a run with remote inference enabled sends whatever the context builder assembled. Provider-side egress is enforced; prompt-side is not. Wiring it changes prompt bytes, which is why it waits for a change that can be measured against a recorded run. |
+| The curator is called with `provider_calls=[]` | `runner._curate_memory` passes an empty sequence, so the curator's call-order lesson can never fire, and `LongTermIndex.mark_used` is never called from `src/`, so `last_used_at` stays unset. Both are inert, not wrong. |
+| `logfile` reads a whole file before truncating | The documented `max_bytes` bound is applied after the read, so the read itself is unbounded. A seek-and-read-window would fix it and is a provider-level change. |
+| Two tests that cannot fail the way they are written | `tests/test_memory.py` asserts `importlib.import_module(...) is not None`, which is never `None`, and `tests/test_providers_necessity.py` asserts `len(decision.selected) <= 3`, which an empty selection satisfies. R2-30 in `docs/dev/AUDIT-v12.md`. |
+
 ## What is deliberately not implemented
 
 Before trusting an entry in this table, read `docs/dev/AUDIT-v12.md`: it re-verified every row
@@ -160,10 +176,10 @@ integrity defects — with the command that reproduces each one.
 | Absent | Why |
 |---|---|
 | v2 Token Optimizer | Decision D23 defers it until v1 traces exist to tune against. Provider-call telemetry is recorded so those traces exist. |
-| Conflict re-planning that a real run can reach | The wiring exists and is tested (`runtime/replan.py`, `runtime/loop.py`), but **no shipped run reaches it**: a conflict needs two providers to observe one subject, and the scripted planner re-requests a capability only after a *failed* attempt - a successful one is recorded as completed and skipped. No committed run directory contains a single correlation. `tests/test_integration_v11.py::test_with_the_shipped_planner_no_conflict_is_reachable` asserts that limit rather than leaving it to be discovered. |
-| Prompt-content egress filtering | `policy/egress.py` provides `classify_prompt_content` and `redact_for_egress`, and they are tested, but **nothing calls them**. A run with remote inference enabled still sends whatever the context builder assembled. Provider-side egress is enforced; prompt-side is not. |
-| Auditing a run from the CLI | `runtime/verify.py` re-derives a run's reference graph and reports every broken reference, but `audit_run_dir` is called only from tests. `harness replay` verifies the event chain and evidence spans; it does not call the provenance audit, so an operator has no command that reports a dangling decision or grant reference. |
-| Skill-requested independent verification | The necessity gate supports `trust_diversity_required`, and design 08 lists `independent_verification` as a legal expansion reason, but the loop never sets the flag: no skill can ask for its conclusion to rest on two sources. This is also one of the two paths that would make a conflict reachable. |
+| A conflict re-planning *from disagreement* in a shipped run | The wiring exists and is tested, and v1.2 made it reachable: a skill that asks for corroboration (`entry_point.verification.independent_for`) now causes the gate to select two providers for one need, which is what a conflict is correlated from. On the shipped fixtures the synthetic and nmap providers agree, so no conflict arises and no follow-up is scheduled; `tests/test_integration_v11.py::test_with_the_shipped_planner_no_conflict_is_reachable` still asserts that limit. |
+| ~~Prompt-content egress filtering~~ | Moved to the carried-forward defects below: it is a defect, not a deliberate absence. |
+| ~~Auditing a run from the CLI~~ | **Implemented in v1.2.** `harness verify <run-dir>` calls `audit_run_dir`, prints every issue with its severity and exits non-zero on an error; `--json` prints the audit document. `harness replay` remains the integrity check (event chain, evidence spans, findings). |
+| ~~Skill-requested independent verification~~ | **Implemented in v1.2.** `InvestigationLoop._corroboration_required` reads `verification.independent_for` and `allow_second_provider_by_default` and passes `trust_diversity_required` to the gate, where a second provider exists for the capability. `entry_point` asks and the run records the expansion. |
 | Memory persistence as a **cap** check | `memory_persistence` measures whether every promoted entry names its source run. It does not measure that `MEMORY.md` ended under its byte cap, because the active file lives in the workspace rather than in the run directory. The cap itself is still enforced and tested by `MemoryManager`. |
 | Active verification (`nuclei`, `http.probe`, exploitation of any kind) | Out of scope by decision. It is also why no finding can reach status `confirmed` from a version match: only an observation of the thing itself does that. |
 | A live lab run and a real `nmap` scan | Neither was possible in the environment this was built in. The lab is validated as configuration and the scanner adapter is tested for its degradation path. |
