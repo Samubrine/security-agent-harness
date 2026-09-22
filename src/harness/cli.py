@@ -119,6 +119,37 @@ def run(
 
 
 @app.command()
+def verify(
+    run_dir: Annotated[Path, typer.Argument(help="A finished run directory.")],
+    json_output: Annotated[bool, typer.Option("--json", help="Print the audit as JSON.")] = False,
+) -> None:
+    """Audit a run's reference graph: executions, decisions, grants, observations, findings.
+
+    `harness replay` answers "do this run's own claims hold together?"; this answers "does anything it
+    names actually exist?". Until v1.2 the second question was only answerable from code -
+    `runtime.verify.audit_run_dir` had no caller outside the tests - so a run directory with a
+    dangling decision or grant reference could be read, replayed and reported on without anyone being
+    told (K2).
+    """
+    from harness.runtime.verify import audit_run_dir
+
+    audit = audit_run_dir(run_dir)
+    if json_output:
+        console.print_json(json.dumps(audit.model_dump(mode="json")))
+    else:
+        colour = "green" if audit.ok else "red"
+        checked = ", ".join(f"{name}={count}" for name, count in sorted(audit.checked.items()))
+        console.print(f"[{colour}]run {audit.run_id}: {'ok' if audit.ok else 'problems'}[/{colour}]")
+        if checked:
+            console.print(f"  checked: {checked}")
+        for issue in audit.issues:
+            style = "red" if issue.severity == "error" else "yellow"
+            console.print(f"  [{style}]{issue.severity}:[/{style}] {issue.code} {issue.subject}: {issue.detail}")
+    if not audit.ok:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def replay(
     run_dir: Annotated[Path, typer.Argument(help="A finished run directory.")],
     json_output: Annotated[bool, typer.Option("--json", help="Print the replay report as JSON.")] = False,

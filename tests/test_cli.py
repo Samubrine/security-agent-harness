@@ -7,6 +7,7 @@ that only works because of state left behind in the repository would fail here.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -198,3 +199,25 @@ def test_replay_command_fails_nonzero_on_a_broken_chain(cli_workspace) -> None:
 
     result = runner.invoke(app, ["replay", str(run_dir)])
     assert result.exit_code == 1
+
+
+def test_verify_reports_a_dangling_reference_from_the_command_line(recorded_run_dir: Path, tmp_path: Path) -> None:
+    """K2: the reference audit had no operator path - `audit_run_dir` was callable only from code."""
+    run = tmp_path / "run"
+    shutil.copytree(recorded_run_dir, run)
+
+    clean = runner.invoke(app, ["verify", str(run)])
+    assert clean.exit_code == 0, clean.stdout
+
+    executions = json.loads((run / "executions.json").read_text(encoding="utf-8"))
+    executions[0]["necessity_decision"] = "d-fabricated"
+    (run / "executions.json").write_text(json.dumps(executions), encoding="utf-8")
+
+    broken = runner.invoke(app, ["verify", str(run)])
+    assert broken.exit_code == 1, broken.stdout
+    assert "d-fabricated" in broken.stdout
+    assert "execution_necessity_decision_missing" in broken.stdout
+
+    as_json = runner.invoke(app, ["verify", str(run), "--json"])
+    assert as_json.exit_code == 1
+    assert json.loads(as_json.stdout)["issues"][0]["code"] == "execution_necessity_decision_missing"
