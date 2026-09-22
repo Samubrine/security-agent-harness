@@ -45,6 +45,13 @@ def run(
     skill: Annotated[str, typer.Option("--skill", "-s", help="Skill name, e.g. port_scan.")] = "port_scan",
     scope: Annotated[Path, typer.Option("--scope", help="Signed scope record.")] = DEFAULT_SCOPE,
     public_key: Annotated[Path | None, typer.Option("--public-key", help="Ed25519 public key for the scope record.")] = None,
+    dev_embedded_key: Annotated[
+        bool,
+        typer.Option(
+            "--dev-embedded-key",
+            help="Verify the scope against the key embedded in the record itself (development only).",
+        ),
+    ] = False,
     target: Annotated[str | None, typer.Option("--target", help="Scope alias to investigate.")] = None,
     model_backend: Annotated[str, typer.Option("--model-backend", help="scripted | ollama | openai | replay")] = "scripted",
     model: Annotated[str, typer.Option("--model", help="Model id for the chosen backend.")] = "scripted-planner",
@@ -63,6 +70,7 @@ def run(
         skill=skill,
         scope_path=scope,
         public_key_path=public_key,
+        dev_embedded_key=dev_embedded_key,
         root=_repo_root(),
         model_backend=model_backend,
         model_id=model,

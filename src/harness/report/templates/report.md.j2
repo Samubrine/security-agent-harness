@@ -11,8 +11,17 @@
 
 ## Safety architecture
 
-- Scope is a signed authorisation record verified before any model call; no valid signature, no run.
+{% if run.authority == "anchored" %}
+- Scope is a signed authorisation record, verified against the operator's public key ({{ run.anchor_fingerprint[:16] }}) before any model call; no valid signature, no run.
+{% elif run.authority == "self-signed" %}
+- **Self-signed authority.** This run verified the scope against the key embedded in the record itself. Anyone able to edit that file could have re-signed it with their own key, so the signature proves the record is self-consistent, not that the operator authorised this run.
+{% else %}
+- The authority this run started under was not recorded (a run directory from before v1.2).
+{% endif %}
 - Targets are addressed by opaque grants. The model never sees or supplies a host, port or path.
+{% if run.port_window %}
+- Provider calls are bounded to the ports the scope authorises ({{ run.port_window }}).
+{% endif %}
 - Untrusted text is data-only, wrapped in a per-run nonce; instruction-shaped payloads are reported as observations, not obeyed.
 - Commands are argv arrays built by the harness; there is no shell interpolation anywhere.
 - Every artifact is content-addressed, every evidence span is recomputable, and every event is hash-chained.

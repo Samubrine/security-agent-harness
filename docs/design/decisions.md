@@ -143,6 +143,39 @@ with the disposition recorded here and enforced by
 | `Observation.freshness` | **deferred** | It is a recorded field, not a setting: an operator cannot set it and no decision should rest on a timestamp that is, for every shipped parser, the time the observation was recorded. Deleting it requires editing the frozen fixture, whose rows carry it and which is validated with `extra="forbid"`; §0.1.4 forbids that outside a deliberate re-record. Decision: delete it in the next deliberate re-record, not before. |
 | `ProviderExecution.nondeterminism` | **deferred** | Same reason, plus a second one: the value echoes the *provider's* declaration about itself, and invariant 12 says the harness must judge by the transport it chose (`egress.json` already records that judgement). It is redundant with a record that is trusted, so it should go the same way as `freshness` — at the next deliberate re-record. |
 
+## D26 — What the scope record authorises, and who it is verified against (v1.2)
+**Accepted.** The round-2 audit found five authorisation claims that were signed but not enforced
+(`docs/dev/AUDIT-v12.md` R2-05 … R2-09, R2-32). Each is now a check, and this is what each check
+means:
+
+* **Ports.** A `ScopeNetwork` may carry `ports`, the set of ports it authorises. The window is minted
+  onto `Grant.ports`, offered to the planner as the only port specification it may propose for that
+  grant, and enforced in `PolicyEngine.decide`: a call whose `args.ports` reaches outside the window
+  is denied with `ports_not_granted`, and a call naming no ports at all is denied too, because the
+  provider would otherwise choose its own default set. A network without the field says nothing about
+  ports, which is the pre-v1.2 behaviour and is kept deliberately.
+* **Payload versions.** `ScopeFile.payload_version` records the shape of the payload a record was
+  signed under, so a field added to the model later does not make earlier signatures unverifiable -
+  the run frozen in `tests/fixtures/run/port_scan` is signed with a key that no longer exists. A
+  record may not carry a field its declared version did not have, so nothing in a record can sit
+  outside its own signature. `sign_scope` always signs the current version.
+* **Trust anchor.** A run verifies the scope against an operator-supplied public key. Without one it
+  refuses: the embedded-key fallback proves the record agrees with itself, which anyone who can edit
+  the file can arrange. `--dev-embedded-key` opts into that fallback explicitly, and both the run
+  manifest and an `AUTHORITY_VERIFIED` event record `authority: anchored | self-signed` with the
+  anchor's fingerprint, so a report can say which one a run had. `make run`, `make eval` and the
+  scenario invocations pass the anchor; the README recipe does too.
+* **`scope.dry_run`.** Effective dry run is `request.dry_run or scope.dry_run`. A scope signed for a
+  rehearsal cannot execute, and the request can only add the restriction.
+* **Grant lifetime.** `expires_at = min(now + ttl, scope.window.to)`, and minting under a window that
+  has already closed is refused. The window is evaluated once, at load; this is what stops a grant
+  outliving the authority it came from.
+* **Argument schemas.** `ProviderSpec.input_schema` is enforced by `PolicyEngine.decide` through
+  `harness.policy.arguments`, which implements the keywords the shipped adapters declare (`type`,
+  `properties`, `required`, `additionalProperties`, `items`, `enum`) and ignores any other rather than
+  guessing at it. A schema keyword nothing checks would be worse than none: it would let a provider
+  author believe a constraint that is not there.
+
 ## Open questions
 
 | # | Question | Blocking? | Resolution point |

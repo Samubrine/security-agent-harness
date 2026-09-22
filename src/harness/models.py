@@ -131,11 +131,57 @@ class ModelMetadata(_Frozen):
     is_local: bool = True
 
 
+#: The shape of the signed scope payload this build signs. See `ScopeFile.payload_version`: a record
+#: that declares an older version is verified against the fields that existed then, so growing the
+#: model does not turn already-signed authority into unverifiable bytes.
+PAYLOAD_VERSION = 2
+
+#: Fields that joined the payload at version 2. `.` addresses a key inside each entry of a list.
+_LATER_PAYLOAD_FIELDS: tuple[str, ...] = ("payload_version", "networks.ports")
+
+
+def _strip_later_payload_fields(payload: dict[str, Any]) -> None:
+    """Reduce a v2 payload dict to its v1 shape, in place.
+
+    v1 is "every field this model had at v1.1": the two names above are the only ones added since,
+    so removing them is the whole conversion. It is deliberately a fixed list rather than a rule
+    about defaults: a rule would change the meaning of signatures already in the wild, while this
+    only makes the payload of an old record equal to what was signed.
+    """
+    for path in _LATER_PAYLOAD_FIELDS:
+        head, _, tail = path.partition(".")
+        if not tail:
+            payload.pop(head, None)
+            continue
+        entries = payload.get(head)
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, dict):
+                    entry.pop(tail, None)
+
+
 class ScopeWindow(_Base):
     from_at: datetime = Field(alias="from")
     to: datetime
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    @field_validator("from_at", "to")
+    @classmethod
+    def _require_timezone(cls, value: datetime) -> datetime:
+        """A naive timestamp cannot be compared to anything, so it is refused where it is read.
+
+        It used to reach `covers()` and raise a bare `TypeError` from datetime comparison, which
+        escaped every handler: `harness run` and `sign_lab_scope` died with a traceback instead of
+        the refusal panel every other scope problem produces (R2-32). Raising here turns it into the
+        `ScopeError` that `load_scope` wraps a validation failure into.
+        """
+        if value.tzinfo is None:
+            raise ValueError(
+                "scope window timestamps must be timezone-aware; a naive value cannot be compared "
+                "to the current time"
+            )
+        return value
 
     def covers(self, when: datetime) -> bool:
         return self.from_at <= when <= self.to
@@ -144,11 +190,32 @@ class ScopeWindow(_Base):
 class ScopeNetwork(_Base):
     cidr: str
     include: list[str]
+    #: The ports this network authorises, as a set of numbers. Absent means the scope says nothing
+    #: about ports, which is the pre-v1.2 behaviour: a proposal's port argument is then checked for
+    #: shape by the provider and not for authorisation. Present means exactly these ports are
+    #: authorised, and a call that would reach beyond them is denied with a named reason (R2-05).
+    #: A range in a scope record is written out as its numbers rather than as a "80-443" string:
+    #: the record is the authority, and a range syntax here would be a second grammar for it.
+    ports: list[int] | None = None
+
+    @field_validator("ports")
+    @classmethod
+    def _require_real_ports(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError(
+                "an empty ports window authorises nothing; omit the field to say the scope does not "
+                "constrain ports"
+            )
+        invalid = sorted({port for port in value if not 0 < int(port) < 65536})
+        if invalid:
+            raise ValueError(f"ports {invalid} are outside the TCP/UDP port range")
+        return sorted({int(port) for port in value})
 
 
 class ScopeFile(_Base):
     """The authorisation record. Unsigned or unverifiable scope means no run at all."""
-
     scope_id: str
     authorized_by: str
     networks: list[ScopeNetwork]
@@ -161,15 +228,43 @@ class ScopeFile(_Base):
     window: ScopeWindow
     dry_run: bool = False
     notes: str = ""
+    #: Which shape of the signed payload this record was signed under. Bumped when a field joins the
+    #: payload, because a signature is computed over the fields that existed at the time: without a
+    #: version, adding a field to this model would silently make every record already signed
+    #: unverifiable - including the scope of the run frozen in `tests/fixtures/run/port_scan`, whose
+    #: signing key no longer exists to re-sign it. The version is itself covered by the *current*
+    #: payload, so a record cannot be moved between shapes without invalidating its signature.
+    payload_version: int = 1
     signature: str | None = None
     signature_alg: str = "ed25519"
     signer_public_key: str | None = None
 
     def signing_payload(self) -> dict[str, Any]:
-        """Everything except the signature itself, which is what gets signed."""
+        """Everything except the signature itself, in the shape this record was signed under."""
         data = self.model_dump(mode="json")
         data.pop("signature", None)
+        if self.payload_version < PAYLOAD_VERSION:
+            _strip_later_payload_fields(data)
         return data
+
+    @model_validator(mode="after")
+    def _later_fields_need_a_later_version(self) -> Self:
+        """A record may not carry a field that the payload version it declares did not have.
+
+        Without this, a ports window added to a v1 record would sit outside its signature: v1's
+        payload does not include the field, so an edit that adds one still verifies. That edit can
+        only ever *narrow* authority - a window can refuse ports, never add them - so it is not an
+        escalation, but "part of this record is not covered by its signature" is not a state a record
+        should be able to reach by editing bytes. One line, fail closed.
+        """
+        if self.payload_version < PAYLOAD_VERSION and any(
+            network.ports is not None for network in self.networks
+        ):
+            raise ValueError(
+                f"a network carries a ports window but the record declares payload_version "
+                f"{self.payload_version}, which has no such field; re-sign the record"
+            )
+        return self
 
 
 class Grant(_Frozen):
@@ -620,6 +715,14 @@ class RunConfig(_Frozen):
     created_at: datetime
     enable_remote_egress: bool = False
     seed: int = 0
+    #: Which key the scope record was checked against, and its fingerprint. Recorded because
+    #: "signature verified" used to mean only "self-consistent": `verify_scope` falls back to the key
+    #: embedded in the record being verified, and nothing recorded whether an operator-supplied
+    #: anchor was used, so a run authorised by nobody looked exactly like one authorised by the
+    #: operator (R2-06). "anchored" means a public key supplied from outside the record; "self-signed"
+    #: means the record vouched for itself, which is a development mode, not authorisation.
+    authority: Literal["anchored", "self-signed"] | None = None
+    anchor_fingerprint: str | None = None
 
 
 class RunSummary(_Base):

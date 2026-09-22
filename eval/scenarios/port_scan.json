@@ -22,6 +22,7 @@
       "--skill", "{skill}",
       "--objective", "{objective}",
       "--scope", "{scope_path}",
+      "--public-key", "{public_key}",
       "--run-id", "{run_id}",
       "--out", "{run_dir}"
     ]

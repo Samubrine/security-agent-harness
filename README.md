@@ -64,13 +64,16 @@ make scope                   # generate a signing keypair and sign the lab scope
 # One investigation. Artifacts, events, findings and the report land in runs/<id>/.
 make run SKILL=port_scan OBJECTIVE="Enumerate exposed services on lab-web-01."
 
-# Or drive the CLI directly. The scope record is signed; an unsigned one is refused before
-# the model is ever called.
+# Or drive the CLI directly. The scope record is signed, and the run verifies it against the
+# operator's public key: an unsigned record, or one checked only against the key it carries
+# itself, is refused before the model is ever called (--dev-embedded-key opts into that
+# development mode explicitly, and the report then says the authority was self-signed).
 .venv/bin/harness run \
   --skill port_scan \
   --objective "Enumerate exposed services on lab-web-01." \
   --target lab-web-01 \
-  --scope ~/.config/security-agent-harness/lab_scope.signed.json
+  --scope ~/.config/security-agent-harness/lab_scope.signed.json \
+  --public-key ~/.config/security-agent-harness/scope_ed25519_public.pem
 
 .venv/bin/harness replay runs/<run-id>     # re-derive it offline and verify its integrity
 make eval                                  # run every scenario and print the metrics table

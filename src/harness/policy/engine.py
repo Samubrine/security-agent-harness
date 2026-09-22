@@ -21,18 +21,24 @@ the runtime needs to notice it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from harness.errors import GrantError
 from harness.models import (
     ApprovalRequest,
     ApprovalResponse,
+    Grant,
     PolicyDecision,
     ProviderSpec,
     TaintLevel,
 )
 from harness.policy.grants import GrantBook
+
+# Imported from the sibling ports module so the engine's reading of "these ports are inside the
+# window" is the same reading the catalogue renders and the scope mints against.
+from harness.policy.arguments import schema_violation
+from harness.policy.ports import all_within
 
 # Imported from the sibling taint module so that the engine's reading of "this argument is
 # tainted" is the same reading the parsers register against; two implementations would be two
@@ -55,9 +61,28 @@ REASON_RUN_STRICT = "run_strict"
 REASON_DRY_RUN = "dry_run"
 REASON_TAINTED_ARGUMENTS = "tainted_arguments_t3"
 REASON_TAINTED_NOVEL_RESOURCE = "proposal_authored_under_taint_new_resource"
+REASON_PORTS_NOT_GRANTED = "ports_not_granted"
+REASON_ARGUMENTS_INVALID = "arguments_do_not_match_the_provider_schema"
 
 #: How many rejections of one provider a human has to give before the run should stop asking.
 DEFAULT_MAX_REJECTIONS = 3
+
+
+def _ports_are_granted(args: Mapping[str, Any], grant: Grant) -> bool:
+    """Whether every port this call would reach is inside the grant's window.
+
+    A grant with no window says nothing about ports, so nothing here can be violated - which is the
+    pre-v1.2 behaviour, kept so that a scope record without a window keeps working. A grant *with* a
+    window is a statement about exactly which ports are authorised, and then:
+
+    * a named port specification must be entirely inside it, and
+    * a call that names no ports at all is refused, because the provider would choose its own default
+      set and the window cannot vouch for a choice it did not see. Refusing is the fail-closed
+      reading; the alternative would be to guess which ports the adapter defaults to (R2-05).
+    """
+    if grant.ports is None:
+        return True
+    return all_within(args.get("ports"), grant.ports)
 
 
 def is_side_effectful(provider: ProviderSpec) -> bool:
@@ -170,8 +195,17 @@ class PolicyEngine:
                 reasons.append(REASON_GRANT_EXPIRED)
             if capability not in grant.capabilities:
                 reasons.append(REASON_CAPABILITY_NOT_GRANTED)
+            if not _ports_are_granted(args, grant):
+                reasons.append(REASON_PORTS_NOT_GRANTED)
         if not provider.supports(capability):
             reasons.append(REASON_CAPABILITY_NOT_SUPPORTED)
+        arguments_problem = schema_violation(provider.input_schema, args)
+        if arguments_problem is not None:
+            # The code is the machine-readable half, following the convention the rest of this module
+            # keeps; the sentence is the half that says *which* argument was wrong, because "the
+            # arguments do not match the schema" is not actionable to whoever reads the decision
+            # after the fact (R2-07).
+            reasons.extend([REASON_ARGUMENTS_INVALID, arguments_problem])
 
         if reasons:
             verdict = "deny"

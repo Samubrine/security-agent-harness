@@ -77,7 +77,7 @@ scope:
 
 run:
 	$(HARNESS) run --skill $(SKILL) --objective "$(OBJECTIVE)" \
-		--scope $(SCOPE_SIGNED) --out $(RUN)
+		--scope $(SCOPE_SIGNED) --public-key $(SCOPE_PUBLIC_KEY) --out $(RUN)
 
 replay:
 	$(HARNESS) replay $(RUN)
@@ -87,7 +87,8 @@ eval:
 	# at another entry point with EVAL_ARGS="--entrypoint /path/to/harness".
 	# The signing key lives outside the repository, so the signed scope record is supplied here
 	# rather than referenced from a scenario file.
-	$(PY) -m eval.runner --repo-root $(REPO_ROOT) --scope $(SCOPE_SIGNED) $(EVAL_ARGS)
+	$(PY) -m eval.runner --repo-root $(REPO_ROOT) --scope $(SCOPE_SIGNED) \
+		--public-key $(SCOPE_PUBLIC_KEY) $(EVAL_ARGS)
 
 doctor:
 	$(HARNESS) doctor

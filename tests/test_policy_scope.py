@@ -18,7 +18,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 
 from harness.errors import ScopeError, ScopeSignatureError
-from harness.models import ScopeFile, ScopeNetwork, ScopeWindow
+from harness.models import PAYLOAD_VERSION, ScopeFile, ScopeNetwork, ScopeWindow
 from harness.policy import generate_keypair, key_protection, load_scope, sign_scope, verify_scope
 from harness.util import canonical_json, utcnow
 
@@ -184,10 +184,48 @@ def test_signing_is_deterministic_over_the_canonical_payload(tmp_path: Path) -> 
     # Ed25519 is deterministic: identical records produce identical signatures, which is what
     # lets a replay compare signature bytes rather than merely "some signature verified".
     assert first.signature == second.signature
-    # And the signed bytes are the canonical form of everything except the signature itself.
-    payload = canonical_json(scope.signing_payload())
-    assert json.loads(payload).keys() == scope.model_dump(mode="json").keys() - {"signature"}
+    # The signed bytes are the canonical form of everything except the signature itself, at the
+    # payload version the record was signed under. A record this build issues declares the current
+    # version, so nothing it holds sits outside its signature.
+    assert first.payload_version == PAYLOAD_VERSION
+    payload = canonical_json(first.signing_payload())
+    assert json.loads(payload).keys() == first.model_dump(mode="json").keys() - {"signature"}
     assert "signer_public_key" in payload
+
+
+def test_an_older_record_is_verified_against_the_payload_shape_it_declares(tmp_path: Path) -> None:
+    """Growing the model must not turn authority that was signed earlier into unverifiable bytes.
+
+    The run frozen in `tests/fixtures/run/port_scan` is signed exactly this way, with a key that no
+    longer exists to re-sign it: its payload has no `payload_version` and no network port window, so
+    that is the shape its signature covers (R2-05 and rule 0.1.4 of the ledger).
+    """
+    priv, pub = keypair(tmp_path)
+    v1 = make_scope()
+    assert v1.payload_version < PAYLOAD_VERSION
+    key = serialization.load_pem_private_key(priv.read_bytes(), password=None)
+    v1.signer_public_key = base64.b64encode(
+        key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    ).decode("ascii")
+    v1.signature = base64.b64encode(key.sign(canonical_json(v1.signing_payload()).encode("utf-8"))).decode("ascii")
+
+    path = write_scope(tmp_path / "v1.json", v1)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    # Written the way a v1.1 build would have written it: no fields it did not know about.
+    raw.pop("payload_version", None)
+    for network in raw["networks"]:
+        network.pop("ports", None)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    loaded = load_scope(path, public_key_path=pub)
+    assert loaded.scope_id == v1.scope_id
+    assert "payload_version" not in loaded.signing_payload()
+
+    # And a field that version did not have cannot be added to it without invalidating the signature.
+    raw["networks"][0]["ports"] = [1, 2, 3]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ScopeError):
+        load_scope(path, public_key_path=pub)
 
 
 def test_a_scope_edited_after_signing_fails_verification(tmp_path: Path) -> None:

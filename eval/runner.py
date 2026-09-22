@@ -232,6 +232,7 @@ def build_command(
     run_dir: Path,
     ground_truth_path: Path,
     scope_override: Path | None = None,
+    public_key: Path | None = None,
 ) -> list[str]:
     """The full argv for one scenario: entry point tokens followed by the scenario arguments."""
     context = {
@@ -239,6 +240,10 @@ def build_command(
         "skill": scenario.skill,
         "objective": scenario.objective,
         "scope_path": str(_resolve_scope(repo_root, scenario, scope_override)),
+        # The trust anchor travels with the command: a run refuses to start without one, because
+        # verifying a record against the key it carries proves only that it is self-consistent
+        # (R2-06).
+        "public_key": str(_resolve_public_key(public_key)),
         "run_id": scenario.run_id,
         "run_dir": str(Path(run_dir)),
         "aliases": ",".join(scenario.aliases),
@@ -256,6 +261,19 @@ def _subprocess_env(repo_root: Path) -> dict[str, str]:
     env["PYTHONPATH"] = f"{src}{os.pathsep}{existing}" if existing else src
     env["PYTHONUNBUFFERED"] = "1"
     return env
+
+
+def _resolve_public_key(override: Path | None) -> Path:
+    """The Ed25519 public key the scope record must verify against.
+
+    Defaulted to the location ``make scope`` writes, because a run without an anchor is refused: the
+    key embedded in the record proves the record agrees with itself, not that the operator signed it
+    (R2-06).
+    """
+    if override is not None:
+        return Path(override).expanduser().resolve()
+    base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / "security-agent-harness" / "scope_ed25519_public.pem"
 
 
 def _resolve_scope(repo_root: Path, scenario: Scenario, override: Path | None) -> Path:
@@ -316,6 +334,7 @@ def run_scenario(
     timeout_s: float,
     dry_run: bool,
     scope_override: Path | None = None,
+    public_key: Path | None = None,
 ) -> ScenarioResult:
     """Run one scenario and score whatever it recorded."""
     scenario_dir = Path(results_dir) / scenario.scenario_id
@@ -327,6 +346,7 @@ def run_scenario(
         run_dir=run_dir,
         ground_truth_path=ground_truth_path,
         scope_override=scope_override,
+        public_key=public_key,
     )
     result = ScenarioResult(
         scenario_id=scenario.scenario_id,
@@ -347,6 +367,14 @@ def run_scenario(
         result.error = (
             f"no scope record at {resolved_scope}; run 'make scope' to generate and sign one, "
             "or pass --scope with its location"
+        )
+        return result
+    resolved_key = _resolve_public_key(public_key)
+    if not resolved_key.exists():
+        result.status = "failed"
+        result.error = (
+            f"no trust anchor at {resolved_key}; a run verifies the scope against the operator's "
+            "public key, so pass --public-key with the one that signed the record"
         )
         return result
 
@@ -497,6 +525,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TOKEN",
         help="argv prefix used to invoke the CLI, given as separate tokens (default: .venv/bin/harness, else python -m harness.cli)",
     )
+    parser.add_argument(
+        "--public-key",
+        type=Path,
+        default=None,
+        help=(
+            "Ed25519 public key that signed the scope record; a run refuses to start without a "
+            "trust anchor (default: the key `make scope` writes)"
+        ),
+    )
     parser.add_argument("--scenario", action="append", default=[], help="run only this scenario_id (repeatable)")
     parser.add_argument("--timeout", type=float, default=900.0, help="per-scenario wall-clock limit in seconds")
     parser.add_argument(
@@ -560,6 +597,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout_s=args.timeout,
             dry_run=args.dry_run,
             scope_override=args.scope,
+            public_key=args.public_key,
         )
         results.append(result)
         print(f"[{result.status}] {scenario.scenario_id}")

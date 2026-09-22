@@ -14,6 +14,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from harness.artifacts import ArtifactStore
 from harness.models import Finding, Observation
+from harness.policy.ports import render_window
 from harness.util import atomic_write_json, atomic_write_text, read_json, read_jsonl, sha256_json, utcnow
 
 TEMPLATES = Path(__file__).parent / "templates"
@@ -26,6 +27,27 @@ SEVERITY_BANDS: tuple[tuple[float, str], ...] = (
     (4.0, "medium"),
     (0.1, "low"),
 )
+
+
+def _port_window(run_dir: Path) -> str | None:
+    """The ports this run was authorised to reach, as the safety section states them.
+
+    Read from the run's own `grants.json` rather than recomputed from a scope file that may have moved
+    since: a report describes the run it is about, and the grants are the authorisation that run
+    actually held (R2-05). `None` when no grant carried a window, which is the case for every run made
+    before the field existed.
+    """
+    path = run_dir / "grants.json"
+    if not path.exists():
+        return None
+    windows = [
+        set(row.get("ports") or [])
+        for row in read_json(path)
+        if isinstance(row, dict) and row.get("ports")
+    ]
+    if not windows:
+        return None
+    return render_window(set().union(*windows))
 
 
 def severity_for(cvss: float) -> str:
@@ -92,6 +114,7 @@ def build_report(*, run_dir: Path) -> tuple[str, dict[str, Any]]:
             "started_at": started.get("at", ""),
             "ended_at": ended.get("at", ""),
             "remote_egress": bool(run.get("enable_remote_egress")),
+            "port_window": _port_window(run_dir),
         },
         "stats": stats,
         "findings": [{"id": v["finding"].id, **v["finding"].model_dump(mode="json"), "evidence": v["evidence"]} for v in findings_view],

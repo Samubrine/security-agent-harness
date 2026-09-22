@@ -6,6 +6,8 @@ the loop stays testable with fakes and the CLI stays a thin argument parser.
 
 from __future__ import annotations
 
+import base64
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +53,11 @@ class RunRequest:
     skill: str
     scope_path: Path
     public_key_path: Path | None = None
+    #: Opt in, explicitly, to a scope record that vouches for itself with its own embedded key. Without
+    #: one of `public_key_path` or this flag a run is refused: the embedded-key fallback proves
+    #: internal consistency, not authorisation, and a run whose authority came from the record it is
+    #: authorising is not a run under anyone's authority (R2-06).
+    dev_embedded_key: bool = False
     root: Path = field(default_factory=lambda: Path.cwd())
     runs_root: Path | None = None
     #: When set, the run is written exactly here instead of under ``runs_root``. The evaluation
@@ -97,6 +104,37 @@ def _budgets_for(skill: Any) -> Budget:
     merged = budgets.model_dump()
     merged.update({k: int(v) for k, v in skill.budget_override.items() if k in allowed})
     return Budget.model_validate(merged)
+
+
+def _authority_for(request: RunRequest, resolved: Any) -> tuple[str, str]:
+    """Which key authorised this run, and its fingerprint, or a refusal.
+
+    `verify_scope` accepts either an operator-supplied anchor or the key embedded in the record being
+    verified. The second is not authorisation - anyone who can edit the file can re-sign it with their
+    own key - and nothing recorded which path was taken, so "signature verified" could not tell a run
+    authorised by the operator from a run authorised by whoever wrote the file (R2-06). The anchor is
+    therefore required, and the embedded-key path has to be asked for by name.
+    """
+    from harness.util import sha256_hex
+
+    anchor = Path(request.public_key_path) if request.public_key_path else None
+    if anchor is None:
+        if not request.dev_embedded_key:
+            raise ConfigError(
+                "no trust anchor: pass the scope's public key, or --dev-embedded-key to run against "
+                "a scope record that vouches for itself (development only; it is not authorisation)"
+            )
+        embedded = resolved.scope.signer_public_key
+        if not embedded:
+            raise ConfigError(
+                "the scope record carries no embedded key either, so there is nothing to verify it "
+                "against"
+            )
+        return "self-signed", sha256_hex(base64.b64decode(embedded))
+    try:
+        return "anchored", sha256_hex(anchor.read_bytes())
+    except OSError as exc:
+        raise ConfigError(f"scope trust anchor {anchor} could not be read: {exc}") from exc
 
 
 def _approval_gate(mode: str, answers: tuple[bool, ...]) -> Any:
@@ -295,6 +333,7 @@ def execute_run(request: RunRequest) -> RunArtifacts:
         public_key_path=request.public_key_path,
         run_id=run_id,
     )
+    authority = _authority_for(request, resolved)
     if request.target_alias:
         filtered = [g for g in resolved.grants.grants if g.alias == request.target_alias]
         if not filtered:
@@ -329,9 +368,14 @@ def execute_run(request: RunRequest) -> RunArtifacts:
         memory=resolved.memory,
         harness_version=__import__("harness").__version__,
         git_sha=_git_sha(root),
-        dry_run=request.dry_run,
+        # A scope signed for a rehearsal can never execute: `dry_run` is part of the signed payload,
+        # and it was read by nothing, so a scope marked dry-run ran for real (R2-08). The request can
+        # only ever add the restriction, never remove one the record carries.
+        dry_run=bool(request.dry_run or resolved.scope.dry_run),
         created_at=utcnow(),
         enable_remote_egress=request.allow_remote,
+        authority=authority[0],
+        anchor_fingerprint=authority[1],
     )
 
     store = ArtifactStore(run_dir, run_id, max_bytes=budgets.max_artifact_bytes)
@@ -383,7 +427,7 @@ def execute_run(request: RunRequest) -> RunArtifacts:
 
     rules = RuleEngine()
     correlator = Correlator(run_id)
-    policy = PolicyEngine(resolved.grants, dry_run=request.dry_run)
+    policy = PolicyEngine(resolved.grants, dry_run=config.dry_run)
     gate = NecessityGate(registry, budgets, skill=resolved.skill, budgets_guard=guard)
     router = Router(registry)
     approvals = _approval_gate(request.approval_mode, request.approval_answers)

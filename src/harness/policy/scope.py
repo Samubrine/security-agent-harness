@@ -47,7 +47,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from pydantic import ValidationError
 
 from harness.errors import ScopeError, ScopeSignatureError
-from harness.models import ScopeFile
+from harness.models import PAYLOAD_VERSION, ScopeFile
 from harness.util import atomic_write_bytes, canonical_json, iso, read_json, utcnow
 
 #: Only Ed25519 is accepted. A record naming another algorithm is refused rather than
@@ -256,6 +256,10 @@ def sign_scope(scope: ScopeFile, private_key_path: Path) -> ScopeFile:
     key = _load_private_key(private_key_path)
     signed = scope.model_copy(deep=True)
     signed.signature_alg = SIGNATURE_ALG
+    # A record being signed now is signed under the payload shape this build verifies, whatever
+    # version the file it came from declared. Leaving an old version in place would sign a payload
+    # that omits the fields this build understands - a signature over less than the record says.
+    signed.payload_version = PAYLOAD_VERSION
     signed.signer_public_key = _public_key_b64(key.public_key())
     signed.signature = None
     signed.signature = base64.b64encode(key.sign(_payload_bytes(signed))).decode("ascii")

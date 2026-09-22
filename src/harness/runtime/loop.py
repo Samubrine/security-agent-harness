@@ -44,6 +44,7 @@ from harness.models import (
 )
 from harness.providers.base import ProviderRequest, ProviderResult
 from harness.providers.necessity import CAPABILITY_OUTPUT_KINDS, cache_key
+from harness.policy.ports import render_window
 from harness.runtime.replan import follow_up_needs
 from harness.runtime.fsm import RunState, State
 from harness.util import canonical_json, iso, new_id, utcnow
@@ -1013,11 +1014,18 @@ class InvestigationLoop:
                 if capability == "log.read" and grant.kind == "fs":
                     variants = [{"path": name} for name in LOG_FILES]
                 for variant in variants:
-                    key = canonical_json({"grant": grant.id, "args": variant})
+                    # A net grant with a port window offers exactly that window: the plan the model
+                    # writes is the plan that will be executed, so what it can propose has to be
+                    # something the scope authorises. A grant without a window adds nothing, which
+                    # keeps the prompts of every existing scope byte-identical (R2-05).
+                    offered_args = dict(variant)
+                    if grant.ports is not None and "ports" not in offered_args:
+                        offered_args["ports"] = render_window(grant.ports)
+                    key = canonical_json({"grant": grant.id, "args": offered_args})
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
-                    offered.append({"grant": grant.id, "alias": grant.alias, "args": variant})
+                    offered.append({"grant": grant.id, "alias": grant.alias, "args": offered_args})
             if not offered:
                 continue
             denied = {
@@ -1172,6 +1180,17 @@ class InvestigationLoop:
                 "budgets": self.config.budgets.model_dump(mode="json"),
                 "grant_count": len(self.context.grants.grants),
                 "dry_run": self.config.dry_run,
+            },
+        )
+        # Which key the scope was verified against, recorded on the trail rather than only in the run
+        # manifest: "the signature verified" is a weaker statement than "the operator's key verified
+        # it", and a reader has to be able to tell which one this run had (R2-06).
+        self.events.append(
+            "AUTHORITY_VERIFIED",
+            {
+                "scope_id": self.config.scope_id,
+                "authority": self.config.authority,
+                "anchor_fingerprint": self.config.anchor_fingerprint,
             },
         )
 

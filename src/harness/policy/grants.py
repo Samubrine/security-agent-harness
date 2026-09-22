@@ -26,8 +26,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from harness.errors import GrantError, ScopeError
-from harness.models import Grant, ScopeFile
-from harness.util import canonical_json, new_id, safe_relpath, sha256_json, sha256_text, utcnow
+from harness.models import Grant, ScopeFile, ScopeNetwork
+from harness.util import canonical_json, iso, new_id, safe_relpath, sha256_json, sha256_text, utcnow
 
 #: Capabilities are derived from what the resource *is*, not from what a caller asks for. A
 #: network resource can be connected to, raw-socketed and TLS-handshaked; a filesystem resource
@@ -120,15 +120,28 @@ def mint_from_scope(
     when = now if now is not None else utcnow()
     if when.tzinfo is None:
         raise ScopeError("grant mint timestamp must be timezone-aware")
-    expires_at = when + timedelta(seconds=ttl_s)
+    # A grant may not outlive the authority it was minted from. The window is evaluated once, at
+    # load, so `now + ttl` could otherwise extend past it and leave a call possible after the scope
+    # had expired (R2-09).
+    if when > scope.window.to:
+        raise ScopeError(
+            f"scope {scope.scope_id} expired at {iso(scope.window.to)}; refusing to mint grants "
+            "under a window that has already closed"
+        )
+    expires_at = min(when + timedelta(seconds=ttl_s), scope.window.to)
     origin = _grant_origin(scope, run_id)
 
     grants: list[Grant] = []
     for alias in sorted(scope.aliases):
         resource = scope.aliases[alias]
         kind, value = _split_resource(alias, resource)
+        ports: list[int] | None = None
         if kind == "net":
-            _require_authorised_ip(scope, alias, value)
+            network = _authorising_network(scope, alias, value)
+            # The window travels with the network that authorises the host, which is where the scope
+            # states it. `None` keeps the pre-v1.2 behaviour: the scope says nothing about ports, so
+            # the grant does not constrain them (R2-05).
+            ports = list(network.ports) if network.ports is not None else None
         else:
             _require_authorised_path(scope, alias, value)
         grants.append(
@@ -137,7 +150,7 @@ def mint_from_scope(
                 resource=resource,
                 alias=alias,
                 capabilities=list(_CAPABILITIES_BY_KIND[kind]),
-                ports=None,
+                ports=ports,
                 expires_at=expires_at,
                 origin=origin,
                 kind=kind,
@@ -163,8 +176,13 @@ def _split_resource(alias: str, resource: str) -> tuple[str, str]:
     return kind, value
 
 
-def _require_authorised_ip(scope: ScopeFile, alias: str, value: str) -> None:
-    """The IP must be listed in a network's include list *and* fall inside that network's CIDR."""
+def _authorising_network(scope: ScopeFile, alias: str, value: str) -> ScopeNetwork:
+    """The network that authorises this alias, or a ScopeError.
+
+    Returns the network rather than a bool because the network carries the rest of what is being
+    authorised for those hosts - its port window - and re-deriving which network matched would be a
+    second implementation of this check (R2-05).
+    """
     try:
         ip = ipaddress.ip_address(value)
     except ValueError as exc:
@@ -186,7 +204,7 @@ def _require_authorised_ip(scope: ScopeFile, alias: str, value: str) -> None:
                     f"scope {scope.scope_id} include entry {entry!r} is not an IP address"
                 ) from exc
             if allowed == ip:
-                return
+                return network
     raise ScopeError(
         f"alias {alias!r} names {value}, which the scope {scope.scope_id} does not include"
     )

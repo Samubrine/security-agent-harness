@@ -796,6 +796,36 @@ def test_scenario_arguments_reject_unknown_placeholders(tmp_path: Path) -> None:
         )
 
 
+def _anchor(tmp_path: Path) -> Path:
+    """A file to act as the scope's public key.
+
+    The runner refuses to spawn a scenario without one: a run verifies the scope against the
+    operator's key, and the key embedded in the record only proves the record is self-consistent
+    (R2-06). Nothing here reads its contents, because the stand-in CLI is what runs.
+    """
+    path = tmp_path / "scope_public.pem"
+    path.write_text("not read by the fake CLI", encoding="utf-8")
+    return path
+
+
+def test_runner_refuses_a_scenario_without_a_trust_anchor(tmp_path: Path, truth: eval_metrics.GroundTruth) -> None:
+    """The operator-facing half of R2-06: no anchor, no run, and the error says why."""
+    scenario = eval_runner.load_scenarios(SCENARIOS_DIR)[0]
+    result = eval_runner.run_scenario(
+        scenario,
+        entrypoint=["/nonexistent/harness"],
+        repo_root=REPO_ROOT,
+        results_dir=tmp_path / "results",
+        ground_truth_path=GROUND_TRUTH_PATH,
+        truth=truth,
+        timeout_s=1.0,
+        dry_run=False,
+        public_key=tmp_path / "missing.pem",
+    )
+    assert result.status == "failed"
+    assert result.error and "trust anchor" in result.error
+
+
 def test_runner_invokes_the_cli_as_an_argv_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A fake CLI stands in for the real one: argv, --out handling and scoring all get exercised.
 
@@ -854,6 +884,7 @@ def test_runner_invokes_the_cli_as_an_argv_list(tmp_path: Path, monkeypatch: pyt
         truth=truth,
         timeout_s=60.0,
         dry_run=False,
+        public_key=_anchor(tmp_path),
     )
 
     assert result.status == "completed", result.error
@@ -905,6 +936,7 @@ def test_runner_fails_loudly_when_the_cli_writes_nothing(tmp_path: Path, truth: 
         truth=truth,
         timeout_s=60.0,
         dry_run=False,
+        public_key=_anchor(tmp_path),
     )
     assert result.status == "failed"
     assert result.error and "without creating" in result.error
