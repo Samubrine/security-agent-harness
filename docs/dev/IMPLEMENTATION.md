@@ -102,6 +102,17 @@ Rules an adapter must honour, because the tests assert them:
   raising - "the tool could not answer" is itself a fact the report must carry;
 * return raw bytes in `stdout` and let a parser decide what they mean.
 
+A parser that raises is handled by who produced the bytes, and the difference is deliberate:
+
+* a **native** adapter's parser failing aborts the run (`status: failed`). Those bytes came from a
+  tool this repository runs itself against fixtures it also controls, so a parse failure is a bug
+  here and the run stops until it is fixed;
+* an **untrusted** producer (an MCP server: `trust_class` other than `local_tool`) whose payload will
+  not parse is recorded as a failed provider call - a `PROVIDER_FAILED` event, a `provider_failure`
+  gap, the execution rewritten as `exit_status: "failed"` and the provider marked failed so the gate
+  replaces it - and the run continues. A remote peer must not be able to choose when a run ends by
+  sending something the harness cannot read.
+
 ### Add a skill
 
 Drop a YAML file in `src/harness/skills/`. `SkillSpec` needs a name, a version, and the capabilities

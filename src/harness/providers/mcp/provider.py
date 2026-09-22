@@ -32,6 +32,11 @@ class McpProvider:
     provider_id: str
     client: McpStdioClient
     tool_for: dict[str, str]
+    #: The argument names each tool declared, from the server's own `tools/list`. Used twice: to
+    #: build the spec's schema so the policy refuses an undeclared key before the call, and to refuse
+    #: one per tool at the boundary. A model-chosen key that a tool happens to honour reaches a
+    #: resource the grant never authorised, which is R2-23 and R2-07 at the remote boundary.
+    tool_arguments: dict[str, frozenset[str]] = field(default_factory=dict)
     risk: str = "LOW"
     trust_class: str = "local_mcp"
     timeout_s: int = 60
@@ -43,11 +48,20 @@ class McpProvider:
     @property
     def spec(self) -> ProviderSpec:
         if self._spec is None:
+            declared = sorted({name for names in self.tool_arguments.values() for name in names})
             self._spec = ProviderSpec(
                 id=self.provider_id,
                 kind="mcp",
                 capabilities=sorted(self.tool_for),
-                input_schema={"type": "object", "additionalProperties": True},
+                # What the server said its tools take, and nothing else - unless it said nothing at
+                # all, in which case there is no declaration to hold the model to and the schema stays
+                # permissive rather than denying every call for a server that is merely terse.
+                input_schema=(
+                    {"type": "object", "properties": {name: {} for name in declared},
+                     "additionalProperties": False}
+                    if declared
+                    else {"type": "object", "additionalProperties": True}
+                ),
                 output_media_type=MEDIA_TYPE,
                 parser=self.parser,
                 risk=self.risk,  # type: ignore[arg-type]
@@ -74,7 +88,14 @@ class McpProvider:
         registry: it would appear in every routing decision as a candidate to reject.
         """
         client.initialize()
-        tools = {str(tool.get("name")) for tool in client.list_tools()}
+        advertised = client.list_tools()
+        tools = {str(tool.get("name")) for tool in advertised}
+        declared: dict[str, frozenset[str]] = {}
+        for tool in advertised:
+            name = str(tool.get("name"))
+            schema = tool.get("inputSchema")
+            properties = schema.get("properties") if isinstance(schema, dict) else None
+            declared[name] = frozenset(properties) if isinstance(properties, dict) else frozenset()
         mapping = dict(capability_map or {})
         if not mapping:
             mapping = {name: name for name in sorted(tools)}
@@ -85,7 +106,13 @@ class McpProvider:
             )
         if not mapping:
             raise ValueError("MCP server " + provider_id + " advertises no usable capability")
-        return cls(provider_id=provider_id, client=client, tool_for=mapping, **kwargs)
+        return cls(
+            provider_id=provider_id,
+            client=client,
+            tool_for=mapping,
+            tool_arguments={tool: declared.get(tool, frozenset()) for tool in mapping.values()},
+            **kwargs,
+        )
 
     def invoke(self, request: ProviderRequest) -> ProviderResult:
         tool = self.tool_for.get(request.capability)
@@ -98,6 +125,28 @@ class McpProvider:
                 kind="partial_coverage",
                 exit_status="denied",
             )
+        accepted = self.tool_arguments.get(tool)
+        if accepted:
+            undeclared = sorted(name for name in request.args if name not in accepted)
+            if undeclared:
+                # Recorded as a gap rather than raised: this is the model proposing something the
+                # server's own declaration does not accept, which is a routing outcome, not a harness
+                # failure. `target` is not in `request.args` - the harness adds it below - so a tool
+                # that only takes a target is still callable.
+                return failed_result(
+                    request=request,
+                    provider=self.provider_id,
+                    error=(
+                        f"tool {tool!r} does not declare argument(s) {undeclared}; it accepts "
+                        f"{sorted(accepted)}"
+                    ),
+                    impact=(
+                        "the call was refused at the boundary, so no argument the server did not "
+                        "declare reached it"
+                    ),
+                    kind="partial_coverage",
+                    exit_status="denied",
+                )
         # Only the grant alias and the validated args cross the boundary. The real resource never
         # does, which is what keeps an MCP server from learning more about the target than the model
         # is allowed to know.

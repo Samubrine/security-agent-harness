@@ -23,6 +23,7 @@ from harness.errors import (
     GrantError,
     HarnessError,
     ModelClientError,
+    ParserError,
     ProposalValidationError,
     ProviderError,
 )
@@ -813,6 +814,32 @@ class InvestigationLoop:
         self._goto(State.FINDINGS)
         return True
 
+    def _record_unparsable_payload(self, execution: ProviderExecution, exc: ParserError) -> None:
+        """Record a remote payload the harness could not read, and keep the run going (R2-18, R2-19).
+
+        The execution is replaced with a failed one because the call contributed nothing: leaving it
+        as `completed` would let the run report a successful call whose bytes produced no evidence,
+        and the gate would keep selecting a provider whose output the harness cannot read.
+        """
+        failed = execution.model_copy(update={"exit_status": "failed"})
+        self.state.executions = [failed if item.id == execution.id else item for item in self.state.executions]
+        self.state.failed_providers.add(execution.provider)
+        self.budgets.failure()
+        self.state.consecutive_failures += 1
+        self.events.append(
+            "PROVIDER_FAILED",
+            {
+                "provider": execution.provider,
+                "capability": execution.capability,
+                "error": str(exc),
+            },
+        )
+        self._add_gap(
+            kind="provider_failure",
+            capability=execution.capability,
+            impact=f"the payload from {execution.provider} could not be read: {exc}",
+        )
+
     def _parse(
         self,
         result: ProviderResult,
@@ -834,18 +861,31 @@ class InvestigationLoop:
         def evidence_of(byte_start: int, byte_end: int) -> list[Any]:
             return [store.ref(digest, byte_start=byte_start, byte_end=byte_end)]
 
-        parsed = self.parsers.parse(
-            result.stdout,
-            result.media_type,
-            execution=execution,
-            run_id=self.config.run_id,
-            trust_class=spec.trust_class,
-            artifact_digest=digest,
-            evidence_of=evidence_of,
-            # The alias, never the resource: it is the only target name the model is allowed to see,
-            # and it is the only one an observation may carry into a prompt.
-            target=target_alias,
-        )
+        try:
+            parsed = self.parsers.parse(
+                result.stdout,
+                result.media_type,
+                execution=execution,
+                run_id=self.config.run_id,
+                trust_class=spec.trust_class,
+                artifact_digest=digest,
+                evidence_of=evidence_of,
+                # The alias, never the resource: it is the only target name the model is allowed to see,
+                # and it is the only one an observation may carry into a prompt.
+                target=target_alias,
+            )
+        except ParserError as exc:
+            if spec.trust_class == "local_tool":
+                # A native adapter's parser failing is a bug in *this* repository: the bytes came from
+                # a tool the harness runs itself, against fixtures it also controls. It aborts the run
+                # so it gets fixed, rather than being absorbed as an environment condition.
+                raise
+            # An untrusted producer's payload that will not parse is an outcome, not a crash: a
+            # remote server can send anything, and a run that dies mid-investigation because of it
+            # has let the server choose when the run ends. The call is recorded as failed, the
+            # provider is marked failed so the gate replaces it, and the run continues with a gap.
+            self._record_unparsable_payload(execution, exc)
+            return _ParsedSummary()
         summary = _ParsedSummary(observations=len(parsed.observations))
         for observation in parsed.observations:
             # Novelty is measured against what the run already knew, which is what makes a second

@@ -14,6 +14,7 @@ import json
 import queue
 import subprocess
 import threading
+import time
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
@@ -21,6 +22,16 @@ from harness.errors import ProviderError, ProviderTimeout
 
 JSONRPC_VERSION = "2.0"
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
+
+#: The longest single frame this client will assemble. A server that streams a gigabyte without a
+#: newline would otherwise be read into memory line by line before anyone could refuse it, and a
+#: frame that long is a protocol error rather than a message (R2-22).
+MAX_FRAME_BYTES = 4 * 1024 * 1024
+
+#: How many complete frames may wait to be consumed. A server that answers faster than the client
+#: asks is a protocol error too: the queue exists to decouple the reader thread from the request
+#: loop, not to buffer an unbounded stream (R2-22).
+MAX_QUEUED_FRAMES = 1024
 
 
 @runtime_checkable
@@ -50,7 +61,11 @@ class StdioTransport:
         if not command:
             raise ProviderError("an MCP stdio transport needs a command to run")
         self._command = list(command)
-        self._queue: queue.Queue[bytes | None] = queue.Queue()
+        self._queue: queue.Queue[bytes | None] = queue.Queue(maxsize=MAX_QUEUED_FRAMES)
+        #: Why the reader thread stopped trusting the stream. Set from that thread and read by the
+        #: request loop, so a server that floods or overruns the client fails the call instead of
+        #: holding the run open.
+        self._failure: str | None = None
         self._process = subprocess.Popen(
             self._command,
             stdin=subprocess.PIPE,
@@ -67,10 +82,31 @@ class StdioTransport:
         stream = self._process.stdout
         try:
             if stream is not None:
-                for line in stream:
-                    self._queue.put(line)
+                while True:
+                    frame = stream.readline(MAX_FRAME_BYTES)
+                    if not frame:
+                        break
+                    if len(frame) >= MAX_FRAME_BYTES and not frame.endswith(b"\n"):
+                        # Refusing here bounds what this client will hold: reading the rest of an
+                        # over-long frame to report it would be the denial of service it avoids.
+                        self._failure = (
+                            f"the MCP server sent a frame longer than {MAX_FRAME_BYTES} bytes without "
+                            "a newline; refusing to keep reading it"
+                        )
+                        break
+                    self._offer(frame)
         finally:
-            self._queue.put(None)
+            self._offer(None)
+
+    def _offer(self, item: bytes | None) -> None:
+        """Hand a frame to the request loop, or record why it cannot be queued."""
+        try:
+            self._queue.put_nowait(item)
+        except queue.Full:
+            self._failure = (
+                f"the MCP server produced more than {MAX_QUEUED_FRAMES} unanswered frames; refusing "
+                "to buffer an unbounded stream"
+            )
 
     def send(self, message: dict[str, Any]) -> None:
         stdin = self._process.stdin
@@ -84,9 +120,20 @@ class StdioTransport:
             raise ProviderError("the MCP server closed its input") from exc
 
     def receive(self, timeout_s: float) -> dict[str, Any]:
+        # One deadline for this call, not one per frame: the loop below skips blank lines, and asking
+        # the queue for a fresh timeout each time let a server hold the client open indefinitely by
+        # sending nothing but newlines - the documented hard timeout never fired (R2-22).
+        deadline = time.monotonic() + max(0.001, timeout_s)
         while True:
+            if self._failure is not None:
+                raise ProviderError(self._failure)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProviderTimeout(
+                    "the MCP server did not answer within " + str(timeout_s) + "s"
+                )
             try:
-                item = self._queue.get(timeout=max(0.001, timeout_s))
+                item = self._queue.get(timeout=remaining)
             except queue.Empty as exc:
                 raise ProviderTimeout(
                     "the MCP server did not answer within " + str(timeout_s) + "s"
@@ -96,7 +143,7 @@ class StdioTransport:
             text = item.decode("utf-8", errors="replace").strip()
             if not text:
                 # Blank lines are framing noise, not messages. Skipping them is not the same as
-                # tolerating a malformed one.
+                # tolerating a malformed one -- and it is not a reason to extend the deadline.
                 continue
             try:
                 message = json.loads(text)
@@ -212,9 +259,19 @@ class McpStdioClient:
         self._transport.send(
             {"jsonrpc": JSONRPC_VERSION, "id": request_id, "method": method, "params": params}
         )
-        deadline = timeout_s if timeout_s is not None else self._timeout
+        # One deadline for the whole request, computed once. Passing the full timeout on every loop
+        # turn restarted the clock each time a frame arrived, so a server that answered slowly - or
+        # sent blank lines forever - held the run open past the timeout it documents (R2-22).
+        limit = timeout_s if timeout_s is not None else self._timeout
+        deadline = time.monotonic() + limit
         while True:
-            message = self._transport.receive(deadline)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProviderTimeout(
+                    "the MCP server did not answer request " + str(request_id)
+                    + " within " + str(limit) + "s"
+                )
+            message = self._transport.receive(remaining)
             if message.get("id") != request_id:
                 # A response to a different request would silently mis-associate output with a
                 # method, which is how a scanner's result ends up attached to the wrong capability.

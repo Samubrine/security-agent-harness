@@ -17,7 +17,7 @@ Two rules are encoded structurally, not by convention:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -77,6 +77,10 @@ GapKind = Literal[
     "rejected_by_user",
     "prompt_injection_attempt",
 ]
+
+#: Membership form of the vocabulary above, for code that has to judge a kind that came from an
+#: untrusted source: a string outside this set is not a gap kind, and `EvidenceGap` would refuse it.
+GAP_KINDS: frozenset[str] = frozenset(get_args(GapKind))
 
 
 class _Base(BaseModel):

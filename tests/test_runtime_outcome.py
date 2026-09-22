@@ -249,3 +249,97 @@ def test_the_summary_counts_match_the_records(lab_environment) -> None:
     )
     assert artifacts.summary.findings == len(read_json(artifacts.run_dir / "findings.json"))
     assert artifacts.summary.provider_calls > 0, "a run that executed nothing proves nothing here"
+
+
+# ---------------------------------------------------------------------------------------------
+# An untrusted producer cannot choose when the run ends (R2-18, R2-19)
+# ---------------------------------------------------------------------------------------------
+
+
+def _unparsable_provider(trust_class: str):
+    """A provider whose media type no parser is registered for.
+
+    That is the shortest path to a `ParserError` from a real call: a remote peer declares output the
+    harness has no reader for. Whether the run survives it depends on who produced the bytes, which is
+    the distinction these two tests pin.
+    """
+    from harness.providers.base import ProviderResult
+
+    @dataclass
+    class _Provider:
+        spec: ProviderSpec
+
+        def invoke(self, request):
+            return ProviderResult(
+                provider=self.spec.id,
+                capability=request.capability,
+                exit_status="completed",
+                stdout=b"nothing here declares a format anyone can read",
+                media_type="application/x-nothing-registers-this",
+            )
+
+    return _Provider(
+        ProviderSpec(
+            id="mcp:loose-server",
+            kind="mcp" if trust_class != "local_tool" else "native",
+            capabilities=["log.read"],
+            output_media_type="application/x-nothing-registers-this",
+            parser="nothing",
+            risk="LOW",
+            trust_class=trust_class,
+            requires_network_egress=False,
+        )
+    )
+
+
+def _run_with_unparsable_output(env, monkeypatch, label: str, trust_class: str):
+    from harness.runtime import runner as runner_module
+
+    provider = _unparsable_provider(trust_class)
+
+    def only_this_provider(request, snapshot, observations, run_id):  # noqa: ARG001
+        return ProviderRegistry(
+            [provider, CveMatcherProvider(snapshot=snapshot, observations=observations)]
+        )
+
+    monkeypatch.setattr(runner_module, "_build_registry", only_this_provider)
+    return execute_run(
+        env.request(
+            objective="Read the authentication log and report what it shows.",
+            skill="log_analysis",
+            target_alias="lab-logs",
+            run_id=label,
+        )
+    )
+
+
+def test_a_remote_payload_the_harness_cannot_read_is_a_recorded_failure(lab_environment, monkeypatch) -> None:
+    """A server sending a format nothing parses must not be able to end the investigation.
+
+    The run ends on the *step budget* rather than on a traceback: the scripted planner keeps asking for
+    the same capability, and the budget is what stops it asking - which is the run's own limit doing its
+    job. What matters here is that the unreadable payload produced a recorded failure, and that the
+    provider is not asked again.
+    """
+    artifacts = _run_with_unparsable_output(lab_environment, monkeypatch, "run-ws05-unparsable", "local_mcp")
+
+    assert artifacts.summary.status in {"completed", "budget_exhausted"}, artifacts.stop_reason
+    assert "Traceback" not in (artifacts.stop_reason or "")
+    gaps = read_jsonl(artifacts.run_dir / "gaps.jsonl")
+    assert any(gap["kind"] == "provider_failure" for gap in gaps), gaps
+    failed = [
+        row for row in read_json(artifacts.run_dir / "executions.json") if row["provider"] == "mcp:loose-server"
+    ]
+    assert failed and failed[0]["exit_status"] == "failed"
+    assert any(
+        row["type"] == "PROVIDER_FAILED" and row["data"]["provider"] == "mcp:loose-server"
+        for row in read_jsonl(artifacts.run_dir / "events.jsonl")
+    )
+
+
+def test_a_native_payload_the_harness_cannot_read_still_aborts(lab_environment, monkeypatch) -> None:
+    """The companion: bytes from a tool the harness runs itself are its own bug, and it is fixed."""
+    artifacts = _run_with_unparsable_output(lab_environment, monkeypatch, "run-ws05-native-unparsable", "local_tool")
+
+    assert artifacts.summary.status == "failed"
+    assert "harness error" in (artifacts.stop_reason or "")

@@ -7,6 +7,7 @@ client that turns a broker's bug into a fabricated finding.
 
 from __future__ import annotations
 
+import json
 import sys
 from collections import deque
 from pathlib import Path
@@ -63,9 +64,17 @@ def happy_server(message: dict[str, Any]) -> dict[str, Any] | None:
     if method == "initialize":
         return ok(message, {"protocolVersion": "2024-11-05", "serverInfo": {"name": "fake", "version": "1.0"}})
     if method == "tools/list":
+        # The schemas are part of the advertisement: a provider holds the model to the arguments the
+        # server declares, so a fake that omits them would be testing a server the harness cannot
+        # describe (R2-23).
+        read = {"name": "log.read", "inputSchema": {"type": "object", "properties": {"target": {}}}}
+        enumerate_tool = {
+            "name": "service.enumerate",
+            "inputSchema": {"type": "object", "properties": {"target": {}}},
+        }
         if message.get("params", {}).get("cursor"):
-            return ok(message, {"tools": [{"name": "log.read"}]})
-        return ok(message, {"tools": [{"name": "service.enumerate"}], "nextCursor": "1"})
+            return ok(message, {"tools": [read]})
+        return ok(message, {"tools": [enumerate_tool], "nextCursor": "1"})
     if method == "tools/call":
         return ok(message, {"structuredContent": {"observations": []}, "isError": False})
     return None
@@ -225,3 +234,178 @@ def test_client_completes_a_handshake_with_a_real_subprocess() -> None:
         assert observations[0]["value"]["product"] == "OpenSSH"
     finally:
         subject.close()
+
+
+# -- the untrusted boundary: a server can send anything --------------------------------
+
+
+def _parse(raw: dict[str, Any], *, target: str | None = None, tmp_path: Path | None = None):
+    """Feed one MCP envelope through the parser the way the runtime does.
+
+    A real artifact store stands behind it because the parser refuses to run without provenance:
+    an observation whose bytes nothing can cite is not evidence.
+    """
+    import json
+    import tempfile
+
+    from harness.artifacts import ArtifactStore
+    from harness.models import ProviderExecution
+    from harness.parsers.mcp_json import parse_mcp_json
+    from harness.util import utcnow
+
+    payload = json.dumps(raw).encode("utf-8")
+    store = ArtifactStore((tmp_path or Path(tempfile.mkdtemp())) / "run", "run-mcp")
+    meta = store.put(payload, media_type=MEDIA_TYPE, producer="mcp:scanner-a")
+    now = utcnow()
+    execution = ProviderExecution(
+        id="x-mcp",
+        run_id="run-mcp",
+        provider="mcp:scanner-a",
+        capability="service.enumerate",
+        grant="g-mcp",
+        policy_decision="pd-1",
+        necessity_decision="d-1",
+        started_at=now,
+        ended_at=now,
+        exit_status="completed",
+    )
+    return parse_mcp_json(
+        payload,
+        execution=execution,
+        run_id="run-mcp",
+        artifact_digest=meta.digest,
+        evidence_of=lambda start, end: [store.ref(meta.digest, byte_start=start, byte_end=end)],
+        target=target,
+    )
+
+
+def _envelope(**result: Any) -> dict[str, Any]:
+    """One MCP result envelope. `observations` defaults to an empty list, which is what the protocol
+    says a server returning no evidence sends; a test that cares about the key being absent omits it.
+    """
+    result.setdefault("observations", [])
+    return {"jsonrpc": "2.0", "id": 1, "result": result}
+
+
+def test_an_unknown_gap_kind_is_recorded_as_partial_coverage() -> None:
+    """A server could end a run by naming a gap badly: the kind went straight into `EvidenceGap`."""
+    parsed = _parse(_envelope(gaps=[{"kind": "server_error", "impact": "the scanner fell over"}]))
+
+    assert [gap.kind for gap in parsed.gaps] == ["partial_coverage"]
+    assert parsed.gaps[0].scope["reported_kind"] == "server_error"
+    assert "server_error" in parsed.gaps[0].impact
+
+
+def test_a_non_object_gap_scope_is_tolerated() -> None:
+    parsed = _parse(_envelope(gaps=[{"kind": "partial_coverage", "scope": "not an object"}]))
+    assert parsed.gaps[0].scope == {}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"cvss": "high"},
+        {"severity": "SEVERE"},
+        {"cpe": 1234},
+        {"product": ["nginx"]},
+    ],
+)
+def test_a_value_the_harness_reads_as_a_type_is_refused_with_a_gap(value: dict[str, Any]) -> None:
+    """Each of these used to raise from a downstream `float()` or pydantic validator."""
+    parsed = _parse(_envelope(observations=[{"kind": "service", "value": value}]))
+
+    assert parsed.observations == []
+    assert len(parsed.gaps) == 1
+    assert parsed.gaps[0].kind == "partial_coverage"
+    assert parsed.gaps[0].scope["index"] == 0
+
+
+def test_a_typed_value_that_fits_is_accepted() -> None:
+    """The companion: the check is about the types, not about refusing MCP evidence."""
+    parsed = _parse(
+        _envelope(
+            observations=[
+                {
+                    "kind": "service",
+                    "value": {"cvss": 9.8, "severity": "critical", "cpe": "cpe:/a:x:y:1", "version": "1"},
+                }
+            ]
+        )
+    )
+    assert len(parsed.observations) == 1
+    assert parsed.gaps == []
+    assert parsed.observations[0].value["severity"] == "critical"
+
+
+def test_the_runtime_target_wins_over_the_one_a_server_named() -> None:
+    """A server naming its own host would otherwise put that host into a claim (R2-20)."""
+    parsed = _parse(
+        _envelope(
+            observations=[{"kind": "service", "value": {"product": "nginx", "target": "10.77.0.99"}}]
+        ),
+        target="lab-web-01",
+    )
+    assert parsed.observations[0].value["target"] == "lab-web-01"
+    assert "10.77.0.99" not in json.dumps(parsed.observations[0].value)
+
+
+def test_a_result_without_an_observations_key_is_an_empty_result_gap() -> None:
+    """A completed call that admits nothing must not look like a call that said nothing."""
+    parsed = _parse({"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": {"anything": True}}})
+    assert parsed.observations == []
+    assert [gap.kind for gap in parsed.gaps] == ["empty_result"]
+
+
+def test_a_result_with_an_empty_observations_list_is_also_an_empty_result_gap() -> None:
+    """And neither is silence: "I looked and found nothing" is a gap in the evidence."""
+    parsed = _parse(_envelope(observations=[]))
+    assert parsed.observations == []
+    assert [gap.kind for gap in parsed.gaps] == ["empty_result"]
+
+
+def test_a_server_that_only_sends_blank_lines_hits_the_timeout() -> None:
+    """The documented hard timeout used to restart on every blank line (R2-22)."""
+    from harness.errors import ProviderTimeout
+    from harness.providers.mcp.client import StdioTransport
+
+    # Slow enough that the deadline is what refuses the call, rather than the queue bound catching a
+    # flood: both are refusals, and this test is about the timeout the client documents.
+    slow_blanks = (
+        "import sys, time\n"
+        "while True:\n"
+        "    sys.stdout.write('\\n')\n"
+        "    sys.stdout.flush()\n"
+        "    time.sleep(0.02)\n"
+    )
+    transport = StdioTransport([sys.executable, "-c", slow_blanks])
+    try:
+        with pytest.raises(ProviderTimeout):
+            transport.receive(0.5)
+    finally:
+        transport.close()
+
+
+def test_a_tool_refuses_an_argument_it_never_declared(tmp_path: Path) -> None:
+    """`{**args, "target": alias}` forwarded model-chosen keys to a tool that honoured them (R2-23)."""
+    subject, _ = client()
+    provider = McpProvider.from_advertised_tools(
+        provider_id="mcp:scanner-a", client=subject, capability_map={"service.enumerate": "service.enumerate"}
+    )
+    assert provider.tool_arguments["service.enumerate"] == {"target"}
+    assert provider.spec.input_schema["additionalProperties"] is False
+
+    refused = provider.invoke(
+        ProviderRequest.build(
+            grant=grant(),
+            capability="service.enumerate",
+            run_id="run-mcp",
+            args={"totally_unknown_arg": "junk"},
+        )
+    )
+    assert refused.exit_status == "denied"
+    assert refused.gaps and refused.gaps[0].kind == "partial_coverage"
+
+    allowed = provider.invoke(
+        ProviderRequest.build(grant=grant(), capability="service.enumerate", run_id="run-mcp", args={})
+    )
+    assert allowed.exit_status == "completed"
