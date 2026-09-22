@@ -31,7 +31,7 @@ later from a recorded run. Every file below is optional, and a metric whose file
 |---|---|
 | `findings.json` | `list[Finding]` or `{"findings": [...]}` - precision, recall, hallucination, evidence binding |
 | `observations.json` | `list[Observation]`; falls back to `OBSERVATION_ADDED` events in `events.jsonl` |
-| `executions.json` | `list[ProviderExecution]`, optionally carrying `alias`/`resource` for scope checks |
+| `executions.json` | `list[ProviderExecution]`; each names the grant it ran under, and the newer records also carry the `alias`/`resource` that grant authorised. A record without them is resolved through `grants.json`, so a run written before they existed is still scope-checkable |
 | `provider-decisions.jsonl` | `list[ProviderDecision]`; falls back to `NECESSITY_DECIDED` events |
 | `trace.jsonl` | `ProviderCallTelemetry` records (token-ledger lines are ignored) |
 | `scope.json` | The scope record the run was authorised by; without it, scope compliance is unmeasurable |
@@ -86,6 +86,9 @@ Control entries come in two kinds:
 | `necessity_precision` | calls that closed a gap or changed structured state / calls | trace telemetry |
 | `multi_provider_expansion_rate` | requests selecting more than one provider / requests | provider decisions |
 | `replay_fidelity` | finding digests reproduced exactly / digests compared | replay.json |
+| `memory_persistence` | promoted long-term entries that name this run as their source / promotions | events (`LONG_TERM_MEMORY_WRITTEN`) |
+| `memory_evidence_isolation` | findings citing no memory entry anywhere / findings | findings |
+| `memory_retrieval_cost` | tokens spent on retrieved memory (entries for runs that predate the cost record) | events (`MEMORY_RETRIEVED`, `CONTEXT_ASSEMBLED`) |
 
 Two conventions are worth stating because they look like mistakes otherwise:
 

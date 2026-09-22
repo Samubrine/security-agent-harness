@@ -400,6 +400,12 @@ class ProviderExecution(_Frozen):
     capability: str
     provider_version: str | None = None
     grant: str
+    #: The alias the model saw and the resource the grant authorised, resolved at execution time.
+    #: Recorded so a reader of the run - or a metric scoring its scope compliance - does not have to
+    #: re-derive them from the grant, which is exactly what made the resource half of
+    #: `scope_compliance` unfalsifiable (R2-11). `resource` is the value the model never sees.
+    alias: str | None = None
+    resource: str | None = None
     policy_decision: str
     necessity_decision: str
     started_at: datetime

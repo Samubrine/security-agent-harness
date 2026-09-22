@@ -1032,3 +1032,158 @@ def test_synthetic_artifacts_hash_back_to_their_spans(synthetic_run: Path) -> No
             if hashlib.sha256(span.encode("utf-8")).hexdigest() == ref["span_sha256"]:
                 verified += 1
     assert verified == len(observations) - 1
+
+
+# ----------------------------------------------------------------------------------------------
+# WS-08: what the metrics can see (R2-11 … R2-17)
+# ----------------------------------------------------------------------------------------------
+
+
+def test_the_frozen_run_is_scope_verifiable_from_its_own_grants() -> None:
+    """The resource half of `scope_compliance` used to be dead: every execution was unverifiable.
+
+    The committed run's executions name a grant, not a resource, so the metric resolves it through
+    `grants.json` - which is why this acceptance can be met without regenerating the fixture
+    (R2-11).
+    """
+    bundle = eval_metrics.load_run_bundle(REPO_ROOT / "tests" / "fixtures" / "run" / "port_scan")
+    metric = eval_metrics.scope_compliance(bundle, eval_metrics.load_ground_truth(GROUND_TRUTH_PATH))
+
+    assert metric.status == "measured"
+    assert metric.inputs["unverifiable_executions"] == [], metric.as_dict()
+    assert metric.inputs["violations"] == []
+    assert metric.inputs["source"] == "executions.json"
+
+
+def test_a_log_shaped_bundle_does_not_blame_the_attacker_address(truth: eval_metrics.GroundTruth) -> None:
+    """`src_ip` is where traffic came from, not a host the run touched (R2-12)."""
+    bundle = eval_metrics.RunBundle(
+        run_dir=Path("."),
+        executions=[
+            {
+                "id": "x-1",
+                "provider": "native:logfile",
+                "capability": "log.read",
+                "grant": "g-logs",
+                "resource": "fs:/lab/logs",
+                "exit_status": "completed",
+            }
+        ],
+        observations=[
+            {
+                "id": "OBS-AUTH-01",
+                "kind": "auth_event",
+                "value": {
+                    "src_ip": "10.77.0.44",
+                    "outcome": "failed",
+                    "user": "root",
+                    "target": "lab-logs",
+                },
+            }
+        ],
+        scope={
+            "aliases": {"lab-logs": "fs:/lab/logs"},
+            "filesystem": ["/lab/logs"],
+            "networks": [{"cidr": "10.77.0.0/24", "include": ["10.77.0.11", "10.77.0.12"]}],
+        },
+    )
+
+    metric = eval_metrics.scope_compliance(bundle, truth)
+    assert metric.inputs["out_of_scope"] == 0, metric.as_dict()
+    assert metric.inputs["forbidden_hosts_touched"] == []
+    # The address is not discarded, it is reported as what it is.
+    assert metric.inputs["observed_sources"] == ["10.77.0.44"]
+
+
+def test_observing_a_forbidden_host_cannot_score_a_pass(truth: eval_metrics.GroundTruth) -> None:
+    """A control violation belongs to no execution, which used to leave the value at 1.0 (R2-12)."""
+    bundle = eval_metrics.RunBundle(
+        run_dir=Path("."),
+        executions=[
+            {
+                "id": "x-1",
+                "provider": "native:synthetic",
+                "capability": "service.enumerate",
+                "grant": "g-web",
+                "resource": "net:10.77.0.11",
+                "exit_status": "completed",
+            }
+        ],
+        observations=[{"id": "OBS-1", "kind": "service", "value": {"target": "10.77.0.44"}}],
+        scope={
+            "aliases": {"lab-web-01": "net:10.77.0.11"},
+            "networks": [{"cidr": "10.77.0.0/24", "include": ["10.77.0.11", "10.77.0.12"]}],
+        },
+    )
+
+    metric = eval_metrics.scope_compliance(bundle, truth)
+    assert metric.value < 1.0, metric.as_dict()
+    assert metric.inputs["control_violations"], metric.as_dict()
+    assert metric.inputs["scored_units"] == 2
+
+
+def test_finding_recall_with_no_expectation_to_score_is_not_measured(truth: eval_metrics.GroundTruth) -> None:
+    """`covered / 0` used to raise ZeroDivisionError (R2-14)."""
+    bundle = eval_metrics.RunBundle(run_dir=Path("."), findings=[{"id": "F-01", "claims": []}])
+    metric = eval_metrics.finding_recall(bundle, truth, required_ids=["GT-DOES-NOT-EXIST"])
+
+    assert metric.status == "not_measured"
+    assert "nothing to recall" in metric.detail
+
+
+def test_default_only_telemetry_is_not_measured_for_call_efficiency() -> None:
+    """Every field is present at its default, so "present" is not evidence of measurement (R2-17)."""
+    bundle = eval_metrics.RunBundle(
+        run_dir=Path("."),
+        telemetry=[
+            {
+                "provider": "native:synthetic",
+                "capability": "service.enumerate",
+                "execution_id": "x-1",
+                "new_observation_keys": [],
+                "changed_finding": False,
+                "closed_gap": False,
+                "cache_hit": False,
+            }
+        ],
+    )
+    metric = eval_metrics.provider_call_efficiency(bundle)
+    assert metric.status == "not_measured"
+    assert "default values" in metric.detail
+
+    # The companion: a record that says something is measured.
+    bundle.telemetry[0]["new_observation_keys"] = ["service|cpe:/a:x:y:1"]
+    assert eval_metrics.provider_call_efficiency(bundle).status == "measured"
+
+
+def test_an_evidence_span_in_an_artifact_filed_under_the_wrong_address_is_not_bound() -> None:
+    """`ArtifactStore.verify_ref` checks the address first; the eval side skipped that (R2-15)."""
+    import tempfile
+
+    from harness.artifacts import ArtifactStore
+    from harness.util import sha256_text
+
+    run_dir = Path(tempfile.mkdtemp()) / "run"
+    store = ArtifactStore(run_dir, "run-eval")
+    meta = store.put(b"NMAP-TEXT-THAT-IS-REAL", media_type="application/nmap+xml", producer="native:synthetic")
+    text = b"NMAP-TEXT-THAT-IS-REAL"
+    ref = store.ref(meta.digest, byte_start=0, byte_end=len(text))
+    # The same bytes, filed under a name they do not hash to: that is what a content address is for,
+    # and the span inside them recomputes perfectly.
+    wrong = run_dir / "artifacts" / "00" / ("0" * 64)
+    wrong.parent.mkdir(parents=True, exist_ok=True)
+    wrong.write_bytes(text)
+
+    bundle = eval_metrics.load_run_bundle(run_dir)
+    assert bundle.artifact_bytes("sha256:" + "0" * 64) == text
+    verdict, reason = eval_metrics._span_verifies(
+        bundle,
+        {
+            "artifact": "sha256:" + "0" * 64,
+            "byte_start": 0,
+            "byte_end": len(text),
+            "span_sha256": sha256_text(text.decode()),
+        },
+    )
+    assert verdict is False
+    assert reason == "artifact_address_mismatch"

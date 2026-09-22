@@ -715,6 +715,10 @@ class InvestigationLoop:
             capability=proposal.capability,
             provider_version=result.provider_version,
             grant=proposal.grant,
+            # Both halves of what the grant authorises, so a run's own record answers "what was this
+            # call allowed to reach?" without re-deriving it from grants.json (R2-11).
+            alias=grant.alias,
+            resource=grant.resource,
             policy_decision=policy_decision.id,
             necessity_decision=decision.id,
             started_at=started,
