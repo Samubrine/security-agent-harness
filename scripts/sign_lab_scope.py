@@ -96,7 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not public_path.is_file():
         _fail(f"public key not found: {public_path} (needed to verify the signature before writing it)")
 
-    from harness.policy.scope import load_scope, sign_scope, verify_scope
+    from harness.policy.scope import key_protection, load_scope, sign_scope, verify_scope
     from harness.util import atomic_write_json, sha256_hex
 
     # The input is expected to be unsigned; ``allow_unsigned`` is what makes re-signing an
@@ -118,6 +118,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"aliases:        {', '.join(sorted(signed.aliases))}")
     print(f"signature alg:  {signed.signature_alg}")
     print(f"public key sha256: {sha256_hex(public_path.read_bytes())}")
+    # Reported rather than assumed: the signing key is the trust root, and "signature verified"
+    # says nothing about who else on this machine can read the key that produced it.
+    protection = key_protection(private_path)
+    print(f"private key protection: {protection}")
+    if protection == "none":
+        print(
+            "warning: this platform does not restrict the private key to your account; anyone who "
+            "can read it can sign scope records",
+            file=sys.stderr,
+        )
     print(f"signed scope:   {out_path}")
     return 0
 

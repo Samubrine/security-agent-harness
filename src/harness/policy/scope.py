@@ -20,6 +20,14 @@ in the record. The embedded key alone only proves *internal consistency*: anyone
 the file can also re-sign it with their own key. A run therefore gets a real trust anchor from
 configuration (the CLI passes --public-key); the embedded-key path exists so a tampered scope is
 still caught when no anchor is configured, and it is never silently trusted as authorisation.
+
+Key material
+------------
+The private key is the trust root, so its protection is reported as a fact rather than assumed:
+:func:`protect_private_key` applies the mechanism the platform actually enforces (mode bits on
+POSIX, an explicit ACL on Windows) and reads it back, and :func:`key_protection` answers what
+protects a key right now. A platform that can enforce neither answers ``none``, and a caller that
+is told ``none`` can say so instead of believing the key is protected.
 """
 
 from __future__ import annotations
@@ -27,6 +35,8 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import os
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -118,14 +128,16 @@ def _embedded_public_key_bytes(scope: ScopeFile, *, required: bool) -> bytes | N
     return raw
 
 
-def generate_keypair(private_path: Path, public_path: Path, *, force: bool = False) -> None:
+def generate_keypair(private_path: Path, public_path: Path, *, force: bool = False) -> str:
     """Create an Ed25519 keypair for signing scope records.
 
     Overwriting an existing key is refused unless `force` is set: silently rotating the
     signing key orphans every scope signed with the old one, and the failure then shows up much
     later as "no scope verifies" instead of as "you just replaced the key".
 
-    The private key is written with mode 0600 and belongs outside anything the agent can reach.
+    The private key is restricted to the current account (see :func:`protect_private_key`) and
+    belongs outside anything the agent can reach. Returns the mechanism that protects it, so a
+    caller can report what is actually enforced instead of assuming it.
     """
     priv, pub = Path(private_path), Path(public_path)
     if not force:
@@ -146,13 +158,92 @@ def generate_keypair(private_path: Path, public_path: Path, *, force: bool = Fal
     )
     atomic_write_bytes(priv, private_bytes)
     atomic_write_bytes(pub, public_bytes)
+    # The public key needs no protection: it is the anchor, not the secret.
     try:
-        priv.chmod(_PRIVATE_KEY_MODE)
         pub.chmod(_PUBLIC_KEY_MODE)
     except OSError:
-        # A filesystem without POSIX modes is not a reason to refuse the run, but the caller
-        # should not assume the key was protected; the run record keeps the key path.
         pass
+    return protect_private_key(priv)
+
+
+def protect_private_key(path: Path) -> str:
+    """Restrict a private key to the current account and return what actually enforces that.
+
+    "Only the account that owns this key can read it" is expressed differently on each platform,
+    and a POSIX mode is only one of the expressions. ``os.chmod`` on Windows sets a read-only
+    attribute and nothing else, so a mode-based check passed there while every account that could
+    reach the file kept its inherited access - the guard was measuring a number the platform
+    ignores (R1-11). Windows is therefore handled with an explicit ACL: inheritance is removed and
+    the owner is granted full control, which is what mode 0600 means (read and write for the owner,
+    nothing for anyone else) and keeps key rotation possible.
+
+    The result is read back rather than assumed: ``"posix-mode"`` and ``"windows-acl"`` mean the
+    protection was verified in place, and ``"none"`` means this platform offers no way to restrict
+    the file, which is the value a caller needs in order not to claim protection it does not have.
+    """
+    private = Path(path)
+    if os.name == "nt":
+        account = os.environ.get("USERNAME", "").strip()
+        if not account:
+            return "none"
+        try:
+            subprocess.run(  # noqa: S603 - fixed argv, no shell, no interpolation
+                ["icacls", str(private), "/inheritance:r", "/grant:r", f"{account}:F"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return "none"
+        return key_protection(private)
+    try:
+        private.chmod(_PRIVATE_KEY_MODE)
+    except OSError:
+        return "none"
+    return key_protection(private)
+
+
+def key_protection(path: Path) -> str:
+    """What protects the private key at `path` right now, asked of the platform.
+
+    ``"posix-mode"`` when the file's own mode keeps group and other out, ``"windows-acl"`` when its
+    ACL is a single entry for the current account with nothing inherited, and ``"none"`` otherwise.
+    """
+    private = Path(path)
+    if os.name == "nt":
+        return "windows-acl" if _windows_acl_is_exclusive(private) else "none"
+    try:
+        mode = private.stat().st_mode & 0o777
+    except OSError:
+        return "none"
+    return "posix-mode" if mode == _PRIVATE_KEY_MODE else "none"
+
+
+def _windows_acl_is_exclusive(path: Path) -> bool:
+    """True when the ACL grants one account and inherits nothing.
+
+    Reads ``icacls`` back rather than trusting the command that wrote the ACL. The permission
+    markers it prints - ``(I)`` for an inherited entry, ``(F)``/``(M)``/``(W)``/``(R)`` for the
+    grant - are the same in every Windows installation, unlike the account names beside them, so
+    only the markers and the marker count are used here.
+    """
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["icacls", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    if completed.returncode != 0:
+        return False
+    entries = [line for line in completed.stdout.splitlines() if ":(" in line]
+    if len(entries) != 1:
+        # More than one entry means somebody other than the owner is still named; none at all means
+        # the output did not parse and nothing was verified.
+        return False
+    return "(I)" not in entries[0]
 
 
 def sign_scope(scope: ScopeFile, private_key_path: Path) -> ScopeFile:

@@ -21,8 +21,7 @@ before starting work on anything in this repository: it names, per task, which c
 first.
 
 ```text
-611 tests collected; 610 pass on Windows 11 (the signer's private-key file mode cannot be set
-there - WS-09.2 in docs/dev/AUDIT-v12.md)
+616 tests collected, all passing on Windows 11 / Python 3.14
 port_scan / log_analysis / injection_resistance: every scenario passes its precision, recall,
 hallucination, evidence-binding and scope-compliance targets
 ```
@@ -59,7 +58,7 @@ with no model server, no scanner and no network:
 
 ```bash
 make install                 # create .venv and install the package + dev dependencies
-make test                    # the whole suite (611 tests, no network)
+make test                    # the whole suite (616 tests, no network)
 make scope                   # generate a signing keypair and sign the lab scope record
 
 # One investigation. Artifacts, events, findings and the report land in runs/<id>/.

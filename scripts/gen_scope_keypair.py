@@ -112,29 +112,48 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"       re-run with --force to rotate it (this invalidates every scope record "
                 f"signed with the old key) or --skip-if-exists to keep the current one"
             )
+    elif public_path.exists() and not args.force:
+        # A public key with no private key beside it is a half-deleted keypair. Generating into it
+        # would pair a new private key with the old anchor, which is exactly the mismatch
+        # `generate_keypair` refuses when it is asked without `force`.
+        _fail(
+            f"public key already exists without its private key: {public_path}\n"
+            f"       a new private key must not be paired with the old anchor; re-run with --force "
+            f"to replace both"
+        )
 
     from harness.policy.scope import generate_keypair  # imported late; see the note in main()
     from harness.util import sha256_hex
 
     private_path.parent.mkdir(parents=True, exist_ok=True)
-    # 0700 on the directory and 0600 on the key: the key is the trust root, so it is not the
-    # world-readable default that umask 022 would otherwise produce.
+    # 0700 on the key's directory: the key is the trust root, so it is not the world-readable
+    # default that umask 022 would otherwise produce. The key file itself is protected by
+    # generate_keypair, which applies the mechanism this platform enforces and reports which one.
     os.chmod(private_path.parent, 0o700)
     public_path.parent.mkdir(parents=True, exist_ok=True)
 
-    generate_keypair(private_path, public_path)
+    # This script is the authority on whether to rotate: it has already refused a second run
+    # without --force, honoured --skip-if-exists, and refused to pair a new private key with a
+    # stale public one. Passing `force` keeps generate_keypair, which cannot see those decisions,
+    # from refusing its own overwrite.
+    protection = generate_keypair(private_path, public_path, force=True)
 
     if not private_path.is_file() or private_path.stat().st_size == 0:
         _fail(f"key generation reported success but produced no private key at {private_path}")
     if not public_path.is_file() or public_path.stat().st_size == 0:
         _fail(f"key generation reported success but produced no public key at {public_path}")
-    os.chmod(private_path, 0o600)
-    os.chmod(public_path, 0o644)
 
     fingerprint = sha256_hex(public_path.read_bytes())
     print(f"private key (never in the repo): {private_path}")
     print(f"public key:                      {public_path}")
     print(f"public key sha256:               {fingerprint}")
+    print(f"private key protection:          {protection}")
+    if protection == "none":
+        print(
+            "warning: this platform offers no way to restrict the private key to your account; "
+            "anyone who can read the file can sign scope records",
+            file=sys.stderr,
+        )
     print("next: python -m scripts.sign_lab_scope  (records the key fingerprint in the run report)")
     return 0
 

@@ -171,7 +171,7 @@ def scope_sign(
     output: Annotated[Path | None, typer.Option("--out", help="Where to write the signed record.")] = None,
 ) -> None:
     """Attach an Ed25519 signature to a scope record."""
-    from harness.policy.scope import load_scope, sign_scope
+    from harness.policy.scope import key_protection, load_scope, sign_scope
     from harness.util import read_json
 
     from harness.models import ScopeFile
@@ -183,6 +183,15 @@ def scope_sign(
 
     atomic_write_json(destination, signed.model_dump(mode="json"))
     console.print(f"signed [bold]{destination}[/bold] with key {private_key}")
+    # What protects the key that just signed, asked of the platform: "signed" says nothing about
+    # whether anyone else on the machine can sign with the same key.
+    protection = key_protection(private_key)
+    console.print(f"private key protection: {protection}")
+    if protection == "none":
+        console.print(
+            "[yellow]warning[/yellow] this platform does not restrict the key to your account; "
+            "anyone who can read it can sign scope records"
+        )
 
 
 @scope_app.command("verify")

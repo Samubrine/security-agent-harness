@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import subprocess
 from datetime import timedelta
 from pathlib import Path
 
@@ -17,7 +19,7 @@ from cryptography.hazmat.primitives import serialization
 
 from harness.errors import ScopeError, ScopeSignatureError
 from harness.models import ScopeFile, ScopeNetwork, ScopeWindow
-from harness.policy import generate_keypair, load_scope, sign_scope, verify_scope
+from harness.policy import generate_keypair, key_protection, load_scope, sign_scope, verify_scope
 from harness.util import canonical_json, utcnow
 
 
@@ -70,8 +72,90 @@ def test_generate_keypair_writes_pem_keys_and_protects_the_private_key(tmp_path:
     priv, pub = keypair(tmp_path)
     assert priv.read_bytes().startswith(b"-----BEGIN PRIVATE KEY-----")
     assert pub.read_bytes().startswith(b"-----BEGIN PUBLIC KEY-----")
-    # A private signing key that anyone on the box can read is not a key, it is a suggestion.
-    assert (priv.stat().st_mode & 0o777) == 0o600
+    # A private signing key that anyone on the box can read is not a key, it is a suggestion. What
+    # enforces that differs by platform: mode bits on POSIX, an explicit ACL on Windows, where
+    # os.chmod only sets the read-only attribute - which is why asserting a mode there asserted
+    # nothing (R1-11). `key_protection` reads the platform back instead of trusting the mode.
+    assert key_protection(priv) == ("windows-acl" if os.name == "nt" else "posix-mode")
+    if os.name != "nt":
+        assert (priv.stat().st_mode & 0o777) == 0o600
+
+
+def test_key_protection_reports_none_for_an_unprotected_key(tmp_path: Path) -> None:
+    """The negative control for the test above: an ordinary file is not reported as protected."""
+    loose = tmp_path / "loose.key"
+    loose.write_bytes(b"not a key, but the same kind of file")
+    assert key_protection(loose) == "none"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the POSIX mode is the protection there")
+def test_windows_key_protection_removes_inherited_access(tmp_path: Path) -> None:
+    """The property, checked against the ACL itself rather than against the function that set it.
+
+    A key created under an inherited ACL is readable by every account the parent directory grants
+    access to, which is what the mode 0600 assertion silently accepted before. The permission
+    markers icacls prints are the same in every installation, unlike the account names beside them.
+    """
+    priv, _ = keypair(tmp_path)
+    entries = [
+        line
+        for line in subprocess.run(
+            ["icacls", str(priv)], capture_output=True, text=True, check=True
+        ).stdout.splitlines()
+        if ":(" in line
+    ]
+    assert len(entries) == 1, entries
+    assert "(I)" not in entries[0], "the entry is inherited, so the parent's permissions still apply"
+
+
+def test_a_rotated_key_is_still_protected(tmp_path: Path) -> None:
+    """Rotation must not leave the new key behind with weaker protection than the old one."""
+    priv, pub = keypair(tmp_path)
+    generate_keypair(priv, pub, force=True)
+    assert key_protection(priv) != "none"
+
+
+def test_the_keypair_script_rotates_the_key_when_forced(tmp_path: Path) -> None:
+    """The script's own message tells the operator to re-run with `--force`; that has to work.
+
+    It did not: the script checked for the existing key itself and then called `generate_keypair`
+    without `force`, so the refusal fired one level down as an uncaught ScopeError (R2-13).
+    """
+    from scripts.gen_scope_keypair import main as gen_main
+
+    private, public = tmp_path / "keys" / "scope.key", tmp_path / "keys" / "scope.pub"
+    assert gen_main(["--private-key", str(private), "--public-key", str(public)]) == 0
+    first = public.read_bytes()
+
+    # Negative control: without --force the same invocation must still refuse, or the test above
+    # would pass for a script that overwrites unconditionally.
+    with pytest.raises(SystemExit) as refusal:
+        gen_main(["--private-key", str(private), "--public-key", str(public)])
+    assert refusal.value.code == 2
+    assert public.read_bytes() == first
+
+    assert gen_main(["--private-key", str(private), "--public-key", str(public), "--force"]) == 0
+    assert public.read_bytes() != first, "rotation produced the same key"
+    assert key_protection(private) != "none"
+
+
+def test_the_keypair_script_refuses_a_stale_public_key(tmp_path: Path) -> None:
+    """A public key with no private key beside it is a half-deleted keypair.
+
+    Replacing only the private half would pair a new key with the old anchor, so the mismatch
+    `generate_keypair` refuses must not be reachable by the script passing `force`.
+    """
+    from scripts.gen_scope_keypair import main as gen_main
+
+    private, public = tmp_path / "keys" / "scope.key", tmp_path / "keys" / "scope.pub"
+    public.parent.mkdir(parents=True)
+    public.write_bytes(b"-----BEGIN PUBLIC KEY-----\nstale\n")
+
+    with pytest.raises(SystemExit) as refusal:
+        gen_main(["--private-key", str(private), "--public-key", str(public)])
+    assert refusal.value.code == 2
+    assert public.read_bytes() == b"-----BEGIN PUBLIC KEY-----\nstale\n"
+    assert not private.exists()
 
 
 def test_generate_keypair_refuses_to_overwrite_existing_authority(tmp_path: Path) -> None:

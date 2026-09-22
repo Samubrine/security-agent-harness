@@ -29,7 +29,14 @@ from harness.policy.engine import (
     is_side_effectful,
 )
 from harness.policy.grants import GrantBook, mint_from_scope
-from harness.policy.scope import generate_keypair, load_scope, sign_scope, verify_scope
+from harness.policy.scope import (
+    generate_keypair,
+    key_protection,
+    load_scope,
+    protect_private_key,
+    sign_scope,
+    verify_scope,
+)
 from harness.policy.taint import (
     SPOTLIGHT_MAX_CHARS,
     TaintTracker,
@@ -43,6 +50,8 @@ from harness.policy.taint import (
 __all__ = [
     # scope
     "generate_keypair",
+    "key_protection",
+    "protect_private_key",
     "sign_scope",
     "verify_scope",
     "load_scope",
