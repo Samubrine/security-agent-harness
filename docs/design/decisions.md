@@ -153,7 +153,10 @@ means:
   grant, and enforced in `PolicyEngine.decide`: a call whose `args.ports` reaches outside the window
   is denied with `ports_not_granted`, and a call naming no ports at all is denied too, because the
   provider would otherwise choose its own default set. A network without the field says nothing about
-  ports, which is the pre-v1.2 behaviour and is kept deliberately.
+  ports, which is the pre-v1.2 behaviour and is kept deliberately. The check is on the argument named
+  `ports`, which is what the shipped adapters read: a provider whose port argument has another name
+  is not covered, and an MCP tool that carries ports inside one of its own declared arguments is
+  bounded only by that argument's declaration.
 * **Payload versions.** `ScopeFile.payload_version` records the shape of the payload a record was
   signed under, so a field added to the model later does not make earlier signatures unverifiable -
   the run frozen in `tests/fixtures/run/port_scan` is signed with a key that no longer exists. A
