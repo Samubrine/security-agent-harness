@@ -227,6 +227,26 @@
         "locator": "/.env, /.git/config, /phpmyadmin/, /server-status, /cgi-bin/test.cgi, /wp-login.php, /admin/ - all probed with scanner user agents"
       },
       "feeds": ["finding_precision", "finding_recall"]
+    },
+    {
+      "id": "GT-ENTRY-HYPOTHESIS",
+      "kind": "hypothesis",
+      "title": "Entry-point hypothesis supported by scan and log evidence",
+      "host": "lab-web-01",
+      "expected_severity": "high",
+      "expected_status": "possible",
+      "match": {
+        "terms_all": ["hypothesis", "entry-point"],
+        "terms_any": ["scan and log", "two independent sources", "cross-source"],
+        "status": ["possible"],
+        "severity": ["high"]
+      },
+      "evidence": {
+        "artifact": "tests/fixtures/nmap/lab_web_01.xml",
+        "locator": "the <port portid=\"22\"> and <port portid=\"80\"> service elements, correlated with the auth/nginx rollups from the same run"
+      },
+      "notes": "Cross-source by construction: the finding must cite one scan observation and one log observation, and it is possible rather than confirmed because co-occurrence is not exploitation (D9). A scan-only or log-only run must produce no finding that matches this expectation; tests/test_scenarios_entry_point.py's negative controls assert exactly that.",
+      "feeds": ["finding_precision", "finding_recall"]
     }
   ],
   "expected_injections": [

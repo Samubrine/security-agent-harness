@@ -84,14 +84,21 @@ def provider_failure_gap(gap_id: str, capability: str = "service.enumerate") -> 
 
 
 def test_every_memory_module_imports_standalone() -> None:
-    for name in (
-        "harness.memory",
-        "harness.memory.compact",
-        "harness.memory.curator",
-        "harness.memory.index",
-        "harness.memory.manager",
-    ):
-        assert importlib.import_module(name) is not None
+    """Each module imports on its own and exposes the public symbol callers rely on.
+
+    `import_module(name) is not None` is vacuously true (R2-30); asserting the documented symbol
+    is what makes the test able to fail when a module is emptied or its API moves.
+    """
+    surface = {
+        "harness.memory": "MemoryManager",
+        "harness.memory.compact": "dedupe_repeated_bullets",
+        "harness.memory.curator": "MemoryCurator",
+        "harness.memory.index": "LongTermIndex",
+        "harness.memory.manager": "MemoryManager",
+    }
+    for name, symbol in surface.items():
+        module = importlib.import_module(name)
+        assert hasattr(module, symbol), f"{name} must expose {symbol}"
 
 
 def test_digests_pin_baseline_and_active_content(tmp_path: Path) -> None:

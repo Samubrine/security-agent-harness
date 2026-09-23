@@ -8,12 +8,20 @@ active verification could clear, and must not be reachable from memory.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from harness.runtime.replay import Replayer
 from harness.runtime.runner import execute_run
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from eval import metrics as eval_metrics  # noqa: E402 - must follow the sys.path bootstrap above
+from eval import runner as eval_runner  # noqa: E402
 
 pytestmark = pytest.mark.integration
 
@@ -110,6 +118,36 @@ def test_a_skill_that_does_not_ask_for_corroboration_is_unchanged(lab_environmen
     )
     assert _events(artifacts.run_dir, "PROVIDER_EXPANSION") == []
     assert artifacts.summary.provider_calls > 0, "a run that called nothing proves nothing here"
+
+
+def test_the_scenarios_declared_ground_truth_is_what_the_run_reports(entry_run) -> None:
+    """The eval scenario and this run must not drift apart.
+
+    A scenario is only meaningful if the ids it declares are the findings a real run produces. A
+    renamed rule or a changed match spec would otherwise lower recall silently, long after the run
+    that caused it, which is the failure `validate_scenario_references` cannot see because it only
+    cross-checks ids against the ground truth file.
+    """
+    _, run_dir = entry_run
+    truth = eval_metrics.load_ground_truth(REPO_ROOT / "eval" / "ground_truth.json")
+    scenario = next(
+        item
+        for item in eval_runner.load_scenarios(REPO_ROOT / "eval" / "scenarios")
+        if item.scenario_id == "entry_point"
+    )
+    expectations = {str(exp["id"]): exp for exp in truth.expectations}
+    bundle = eval_metrics.load_run_bundle(run_dir)
+    index = bundle.observation_index()
+    unmatched = [
+        gt_id
+        for gt_id in scenario.expected_outcome["ground_truth_required"]
+        if not any(
+            eval_metrics.finding_matches(finding, expectations[str(gt_id)].get("match"), observation_index=index)
+            for finding in bundle.findings or ()
+        )
+    ]
+    assert unmatched == [], f"the run reported no finding for {unmatched}"
+    assert len(bundle.findings or ()) >= int(scenario.expected_outcome["findings_min"])
 
 
 def test_an_uncorroborated_run_produces_no_hypothesis(lab_environment) -> None:

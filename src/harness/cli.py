@@ -273,16 +273,41 @@ def memory_show(
 
 @app.command("eval")
 def eval_run(
-    scenario: Annotated[str | None, typer.Option("--scenario", help="Scenario name; omit for all.")] = None,
+    scenario: Annotated[
+        list[str] | None, typer.Option("--scenario", help="Scenario id; repeatable. Omit for all.")
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the commands without running them.")] = False,
+    scope: Annotated[Path | None, typer.Option("--scope", help="Signed scope record for every scenario.")] = None,
+    public_key: Annotated[Path | None, typer.Option("--public-key", help="Key that signed the scope record.")] = None,
+    results_dir: Annotated[Path | None, typer.Option("--results-dir", help="Where metrics and run directories are written.")] = None,
 ) -> None:
     """Run the evaluation scenarios and print the metrics table."""
+    # `eval/` is a repository package, not part of the installed `harness` distribution, so it is
+    # importable only when the repository root is on sys.path - which is how `python -m eval.runner`
+    # finds it too. `harness eval` used to raise ImportError for every caller for want of this line.
+    root = _repo_root()
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
     try:
         from eval.runner import main as eval_main
     except ImportError as exc:
         console.print(f"[red]eval harness not available:[/red] {exc}")
         raise typer.Exit(code=3) from exc
-    raise typer.Exit(code=eval_main(scenario=scenario, dry_run=dry_run))
+
+    argv: list[str] = []
+    for name in scenario or ():
+        argv += ["--scenario", name]
+    if scope is not None:
+        argv += ["--scope", str(scope)]
+    if public_key is not None:
+        argv += ["--public-key", str(public_key)]
+    if results_dir is not None:
+        argv += ["--results-dir", str(results_dir)]
+    if dry_run:
+        argv.append("--dry-run")
+    # `eval.runner.main` takes argv. The old call passed `scenario=`/`dry_run=` keywords, which is
+    # a TypeError the CLI surfaced as a traceback rather than a run.
+    raise typer.Exit(code=eval_main(argv))
 
 
 @app.command()

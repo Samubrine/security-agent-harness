@@ -157,14 +157,15 @@ feeds. `make eval` signs nothing and builds nothing, so run `make scope` once fi
 ### Known defects carried forward
 
 These are defects, not decisions: the table above is for things this build deliberately does not do.
-D27 in `docs/design/decisions.md` records why each is deferred and what would close it.
+D27 in `docs/design/decisions.md` records why each is deferred and what would close it. Three
+that were carried here were closed in the follow-up round (`docs/dev/AUDIT-v12.md` §A.2): the
+curator's empty `provider_calls`, the unbounded `logfile` read, and the two tests that could not
+fail. The `R2-30` re-verification also found, and fixed, an inert `max_providers_per_need` in the
+necessity gate.
 
 | Defect | Why it is still open |
 |---|---|
 | Prompt-content egress filtering is dead code | `policy/egress.py` provides `classify_prompt_content` and `redact_for_egress` and they are tested, but nothing calls them, so a run with remote inference enabled sends whatever the context builder assembled. Provider-side egress is enforced; prompt-side is not. Wiring it changes prompt bytes, which is why it waits for a change that can be measured against a recorded run. |
-| The curator is called with `provider_calls=[]` | `runner._curate_memory` passes an empty sequence, so the curator's call-order lesson can never fire, and `LongTermIndex.mark_used` is never called from `src/`, so `last_used_at` stays unset. Both are inert, not wrong. |
-| `logfile` reads a whole file before truncating | The documented `max_bytes` bound is applied after the read, so the read itself is unbounded. A seek-and-read-window would fix it and is a provider-level change. |
-| Two tests that cannot fail the way they are written | `tests/test_memory.py` asserts `importlib.import_module(...) is not None`, which is never `None`, and `tests/test_providers_necessity.py` asserts `len(decision.selected) <= 3`, which an empty selection satisfies. R2-30 in `docs/dev/AUDIT-v12.md`. |
 
 ## What is deliberately not implemented
 

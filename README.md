@@ -21,9 +21,9 @@ before starting work on anything in this repository: it names, per task, which c
 first.
 
 ```text
-720 tests collected and passing on Windows 11 / Python 3.14 (about 52s)
-port_scan / log_analysis / injection_resistance: every scenario passes its precision, recall,
-hallucination, evidence-binding and scope-compliance targets
+728 tests collected, 727 passing, 1 skipped on Linux / Python 3.14 (about 11s)
+port_scan / log_analysis / injection_resistance / entry_point: every scenario passes its
+precision, recall, hallucination, evidence-binding and scope-compliance targets
 ```
 
 ### v1.1: closing the audited gaps
@@ -67,7 +67,7 @@ with no model server, no scanner and no network:
 
 ```bash
 make install                 # create .venv and install the package + dev dependencies
-make test                    # the whole suite (720 tests, no network)
+make test                    # the whole suite (728 tests, no network)
 make scope                   # generate a signing keypair and sign the lab scope record
 
 # One investigation. Artifacts, events, findings and the report land in runs/<id>/.

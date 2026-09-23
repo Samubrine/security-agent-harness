@@ -17,6 +17,7 @@ from harness.cli import app
 
 pytestmark = pytest.mark.integration
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 runner = CliRunner()
 
 
@@ -37,6 +38,20 @@ def test_help_lists_the_commands_without_needing_a_model() -> None:
     assert result.exit_code == 0
     for command in ("run", "replay", "doctor", "scope", "memory", "eval", "schemas"):
         assert command in result.stdout
+
+
+def test_the_eval_command_delegates_to_the_eval_runner(monkeypatch) -> None:
+    """`harness eval` must actually reach `eval.runner.main`.
+
+    The documented console command was unusable: `eval/` is not part of the installed
+    distribution, so the import raised `ImportError`, and the call passed `scenario=`/`dry_run=`
+    keywords to a function that takes argv, which would have been a `TypeError`. A dry run needs
+    no authority material, so it is the cheapest proof that the wiring exists.
+    """
+    monkeypatch.chdir(REPO_ROOT)
+    result = runner.invoke(app, ["eval", "--scenario", "entry_point", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "scenarios: entry_point" in result.output
 
 
 def test_every_subcommand_help_works() -> None:

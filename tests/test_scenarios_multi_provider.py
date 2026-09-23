@@ -167,5 +167,9 @@ def test_a_need_already_satisfied_does_not_call_again(lab_environment) -> None:
     assert by_capability["vulnerability.match"][0] == "single"
     # The run stops because no authorised capability is still missing evidence, which is the gate
     # doing its job rather than the step budget running out.
-    assert artifacts.stop_reason is not None
+    # Pin the reason's content and rule out the wrong reason (R2-30b): the run must stop because
+    # the gate has nothing left that is both authorised and evidence-missing, not because the step
+    # budget ran out. `is not None` alone is satisfied by any stop reason at all.
+    assert artifacts.stop_reason, "a run that stops must record why"
     assert "no capability" in artifacts.stop_reason
+    assert "budget" not in artifacts.stop_reason.lower()

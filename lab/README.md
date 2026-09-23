@@ -70,12 +70,19 @@ A run must execute inside the network, because the targets are unreachable from 
 ```bash
 docker compose -f lab/docker-compose.yml --profile harness run --rm lab-harness \
   harness run --skill port_scan --objective "enumerate services on lab-web-01" \
-              --scope /workspace/lab/scope.signed.json --out /workspace/runs/live-01
+              --scope /authority/lab_scope.signed.json \
+              --public-key /authority/scope_ed25519_public.pem \
+              --out /workspace/runs/live-01
 ```
 
 The harness image is built with its dependencies baked in. That is not an oversight: a container
 that installed packages at start-up would need exactly the internet access this lab exists to
-remove.
+remove. For the same reason `nmap` is installed at build time, and the offline snapshot and
+fixture files are copied in, so a run inside `labnet` can scan without a route off the host. The
+signed scope and its public key are mounted read-only from `~/.config/security-agent-harness`
+(where `make scope` writes them) at `/authority`; the container can verify an authority it cannot
+rewrite. Active memory lives in the `harness-state` volume because the container's own filesystem
+is read-only.
 
 ## Verified properties
 

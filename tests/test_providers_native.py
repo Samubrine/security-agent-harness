@@ -125,6 +125,22 @@ def test_logfile_reports_truncation_rather_than_hiding_it(fixtures_dir: Path) ->
     assert "partial_coverage" in kinds
 
 
+def test_logfile_bounds_the_read_itself(monkeypatch, fixtures_dir: Path) -> None:
+    """R2-28: `max_bytes` bounds the read, not merely the slice handed to the parser."""
+
+    def forbidden_read(self):  # pragma: no cover - reaches here only if the fix regresses
+        raise AssertionError("the provider must not read the whole file into memory")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden_read)
+    provider = LogFileProvider(root=fixtures_dir / "logs", max_bytes=64)
+    result = provider.invoke(fs_request("auth.log", fixtures_dir / "logs"))
+    assert result.exit_status == "completed"
+    assert len(result.stdout) == 64
+    gap = next(g for g in result.gaps if g.kind == "partial_coverage")
+    assert gap.scope["bytes_read"] == 64
+    assert gap.scope["bytes_total"] == (fixtures_dir / "logs" / "auth.log").stat().st_size
+
+
 def test_logfile_requires_a_file_name(fixtures_dir: Path) -> None:
     provider = LogFileProvider(root=fixtures_dir / "logs")
     result = provider.invoke(request(capability="log.read", target=grant(kind="fs", resource="fs:/lab/logs", alias="lab-logs")))

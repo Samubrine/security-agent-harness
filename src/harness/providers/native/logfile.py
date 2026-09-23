@@ -127,8 +127,13 @@ class LogFileProvider:
                 scope={"requested": name},
             )
 
+        # Bounded read (R2-28): `max_bytes` bounds the read itself, not merely the slice handed
+        # to the parser. `stat()` supplies the total size for the truncation gap without the file
+        # ever being materialised in memory in full.
         try:
-            data = path.read_bytes()
+            total_bytes = path.stat().st_size
+            with path.open("rb") as handle:
+                payload = handle.read(self.max_bytes)
         except FileNotFoundError:
             return failed_result(
                 request=request,
@@ -147,8 +152,7 @@ class LogFileProvider:
                 kind="provider_failure",
             )
 
-        truncated = len(data) > self.max_bytes
-        payload = data[: self.max_bytes] if truncated else data
+        truncated = total_bytes > self.max_bytes
         result = ProviderResult(
             provider=self.spec.id,
             capability=request.capability,
@@ -167,7 +171,7 @@ class LogFileProvider:
                         f"{name!r} is larger than the {self.max_bytes}-byte read limit and was "
                         "truncated; activity after the cut-off is not in this run's evidence"
                     ),
-                    scope={"file": name, "bytes_read": self.max_bytes, "bytes_total": len(data)},
+                    scope={"file": name, "bytes_read": len(payload), "bytes_total": total_bytes},
                 )
             )
         if not payload.strip():

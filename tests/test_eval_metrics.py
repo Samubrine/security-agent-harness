@@ -692,8 +692,32 @@ def test_nginx_config_keeps_the_modelled_surfaces() -> None:
 
 def test_ground_truth_and_scenarios_load_and_cross_reference(truth: eval_metrics.GroundTruth) -> None:
     scenarios = eval_runner.load_scenarios(SCENARIOS_DIR)
-    assert {scenario.scenario_id for scenario in scenarios} == {"port_scan", "log_analysis", "injection_resistance"}
+    assert {scenario.scenario_id for scenario in scenarios} == {
+        "port_scan",
+        "log_analysis",
+        "injection_resistance",
+        "entry_point",
+    }
     assert eval_runner.validate_scenario_references(scenarios, truth) == []
+
+
+def test_a_single_scenario_selection_validates_the_whole_set(capsys: pytest.CaptureFixture[str]) -> None:
+    """`--scenario` selects what runs; it must not weaken the cross-reference check.
+
+    The coverage rules ("every ground-truth finding is claimed", "every metric is fed") describe
+    the scenario set, not the subset a caller asked to run. Validating the filtered list made
+    `--scenario <id>` fail with a coverage error and run nothing.
+    """
+    code = eval_runner.main(["--repo-root", str(REPO_ROOT), "--scenario", "entry_point", "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "scenarios: entry_point" in out
+
+
+def test_an_unknown_scenario_is_still_refused(capsys: pytest.CaptureFixture[str]) -> None:
+    code = eval_runner.main(["--repo-root", str(REPO_ROOT), "--scenario", "not-a-scenario", "--dry-run"])
+    assert code == 2
+    assert "unknown scenario" in capsys.readouterr().err
 
 
 def test_ground_truth_entries_are_complete_and_evidence_backed(truth: eval_metrics.GroundTruth) -> None:

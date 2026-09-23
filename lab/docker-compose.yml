@@ -24,6 +24,10 @@
 
 name: sah-lab
 
+volumes:
+  # Writable active-memory state for the hardened, read-only harness container.
+  harness-state:
+
 networks:
   labnet:
     driver: bridge
@@ -95,21 +99,40 @@ services:
       dockerfile_inline: |
         FROM python:3.12-slim
         WORKDIR /workspace
+        # `nmap` is the live provider's binary. Without it the adapter can only degrade, which is
+        # how this lab was validated before: `native:nmap` reported a provider failure and the
+        # synthetic provider answered instead. No raw-socket capability is needed - with
+        # `cap_drop: [ALL]` nmap substitutes a TCP connect scan for its default SYN scan.
+        RUN apt-get update \
+         && apt-get install -y --no-install-recommends nmap \
+         && rm -rf /var/lib/apt/lists/*
         COPY pyproject.toml README.md ./
         COPY src ./src
         COPY eval ./eval
         COPY memory ./memory
         COPY MEMORY.md ./
+        # The offline vulnerability snapshot and the nmap/log fixtures the providers serve. The
+        # runner resolves these relative to the installed package, so they must sit at
+        # /workspace/tests/fixtures rather than merely be reachable from a working directory.
+        COPY tests/fixtures ./tests/fixtures
         RUN pip install --no-cache-dir -e .
         CMD ["sleep", "infinity"]
     image: sah-lab/harness:local
     container_name: lab-harness
     hostname: lab-harness
-    working_dir: /workspace
+    # A writable workspace. `/workspace` itself is read-only (see `read_only` below), so the
+    # active-memory files the runner reads and rewrites live in a volume; artifacts land in the
+    # host bind at /workspace/runs.
+    working_dir: /workspace/state
     volumes:
       # Runs, artifacts and reports are written on the host so the harness keeps nothing inside
       # a disposable container; nothing outside this mount is visible to the run.
       - ../runs:/workspace/runs
+      # Active and baseline memory plus the long-term index persist across runs.
+      - harness-state:/workspace/state
+      # Authority material stays outside the repository (the Makefile writes it there) and is
+      # mounted read-only, so the container can verify a scope it cannot rewrite.
+      - ${HOME}/.config/security-agent-harness:/authority:ro
     networks:
       labnet:
         # 10.77.0.10 is the management address that appears as the legitimate source of traffic

@@ -348,6 +348,14 @@ def execute_run(request: RunRequest) -> RunArtifacts:
     # operation a resource kind can serve.
     resolved.grants = with_logical_capabilities(resolved.grants)
 
+    # The run is authorised and past its precondition checks, so record that these entries were
+    # surfaced into it. `last_used_at` is what a later curator prefers over entries that merely
+    # exist, and nothing under `src/` wrote it before (R2-26). Retrieval does not order by it -
+    # `LongTermIndex.search` orders by rank, then `created_at` - so this cannot change what a run
+    # or a replay retrieves.
+    if resolved.retrieved:
+        index.mark_used([hit.entry.id for hit in resolved.retrieved], when=utcnow())
+
     budgets = _budgets_for(resolved.skill)
     model = build_client(
         backend=request.model_backend,
@@ -526,7 +534,10 @@ def _curate_memory(memory: MemoryManager, index: LongTermIndex, state: Any, even
             run_id=run_id,
             findings=list(state.findings),
             gaps=list(state.gaps),
-            provider_calls=[],
+            # The loop records per-call telemetry; passing `[]` here made the curator's call-order
+            # lesson unreachable (R2-26). The telemetry is metadata about calls the run already
+            # made, so it cannot become evidence - it only decides what the curator may derive.
+            provider_calls=list(state.telemetry),
             events=events.records(),
         )
     except Exception as exc:  # noqa: BLE001 - a curation failure must not invalidate a good run

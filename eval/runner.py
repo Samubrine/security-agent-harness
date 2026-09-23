@@ -564,14 +564,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    if args.scenario:
-        wanted = set(args.scenario)
-        scenarios = [scenario for scenario in scenarios if scenario.scenario_id in wanted]
-        missing = wanted - {scenario.scenario_id for scenario in scenarios}
-        if missing:
-            print(f"error: unknown scenario(s): {', '.join(sorted(missing))}", file=sys.stderr)
-            return 2
-
+    # Validate the whole configuration before selecting a subset. `validate_scenario_references`
+    # enforces global coverage - every ground-truth entry is claimed by some scenario and every
+    # metric is fed - which is a property of the scenario *set*, not of the subset a caller asked
+    # to run. Validating the filtered list made `--scenario <id>` fail with "ground truth finding
+    # ... is not required by any scenario" and run nothing.
     problems = validate_scenario_references(scenarios, truth)
     if problems:
         # A scenario/ground-truth mismatch is a configuration error, and running anyway would
@@ -579,6 +576,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         for problem in problems:
             print(f"error: {problem}", file=sys.stderr)
         return 2
+
+    if args.scenario:
+        wanted = set(args.scenario)
+        scenarios = [scenario for scenario in scenarios if scenario.scenario_id in wanted]
+        missing = wanted - {scenario.scenario_id for scenario in scenarios}
+        if missing:
+            print(f"error: unknown scenario(s): {', '.join(sorted(missing))}", file=sys.stderr)
+            return 2
 
     print(f"entry point: {' '.join(entrypoint)}")
     print(f"ground truth: {ground_truth_path}")

@@ -192,6 +192,7 @@ def test_an_expansion_is_denied_when_the_skill_allows_only_one_provider() -> Non
 
 
 def test_a_skill_may_raise_the_cap_but_never_past_the_hard_ceiling() -> None:
+    """The skill's cap is a real knob; the hard ceiling is 3, and four candidates cannot beat it."""
     skill = SkillSpec(
         name="wide",
         version="0.1.0",
@@ -200,7 +201,22 @@ def test_a_skill_may_raise_the_cap_but_never_past_the_hard_ceiling() -> None:
     )
     engine = gate(spec("native:a"), spec("native:b"), spec("native:c"), spec("native:d"), skill=skill)
     decision = decide(engine, trust_diversity_required=True)
-    assert len(decision.selected) <= 3
+    # Exactly the ceiling, not fewer: `<= 3` also passes for an empty selection, which is the
+    # vacuous form R2-30 named. Four candidates are viable and the skill asked for nine, so only
+    # the hard ceiling can produce three.
+    assert decision.verdict == "expand"
+    assert decision.expansion_reason == "trust_diversity"
+    assert len(decision.selected) == 3
+
+
+def test_the_default_cap_selects_two_even_when_more_candidates_are_viable() -> None:
+    """Without a skill override the budget's cap decides the count, not the candidate list."""
+    decision = decide(
+        gate(spec("native:a"), spec("native:b"), spec("native:c"), spec("native:d")),
+        trust_diversity_required=True,
+    )
+    assert decision.verdict == "expand"
+    assert len(decision.selected) == 2
 
 
 # -- rule 6: nothing eligible -----------------------------------------------------------------

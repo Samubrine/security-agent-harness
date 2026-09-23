@@ -190,13 +190,17 @@ class NecessityGate:
                 f"existing providers disagree about {conflict.key}" if conflict is not None
                 else "this conclusion must not rest on a single source"
             )
-            selected = [spec.id for spec in viable[:2]]
-            for spec in viable[2:]:
+            # `limit` is the cap the skill/budget actually asked for, clamped to the hard
+            # ceiling. Selecting a fixed two made `max_providers_per_need > 2` an inert field
+            # (R2-30): a skill could not ask for three-way verification even though the model
+            # and the hard ceiling both allow it.
+            selected = [spec.id for spec in viable[:limit]]
+            for spec in viable[limit:]:
                 rejected.setdefault(spec.id, f"beyond the {reason_kind} selection")
             return self._budget_checked(
                 selected=selected,
                 expansion_reason=reason_kind,  # type: ignore[arg-type]
-                reason=f"two providers are necessary because {explanation}",
+                reason=f"{len(selected)} providers are necessary because {explanation}",
                 rejected=rejected,
                 base=base,
             )
@@ -205,8 +209,8 @@ class NecessityGate:
         if coverage is not None:
             limit = self._provider_cap()
             if limit >= 2 and len(viable) >= 2:
-                selected = [spec.id for spec in viable[:2]]
-                for spec in viable[2:]:
+                selected = [spec.id for spec in viable[:limit]]
+                for spec in viable[limit:]:
                     rejected.setdefault(spec.id, "beyond the coverage-gap selection")
                 return self._budget_checked(
                     selected=selected,
