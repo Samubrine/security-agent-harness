@@ -1,9 +1,13 @@
 # Agentic Security Investigation Harness
 
-Final project (PBKK). A **local-first agentic harness** — not an app — where security
+Final project (PBKK). A **local-first command-line application and agentic harness** where security
 investigation capabilities are dropped in as *skills*, *native tools*, and *MCP providers*,
 and a locally hosted LLM decides what to investigate next inside a deterministic, auditable
 runtime.
+
+This is a CLI, not a desktop GUI or an interactive full-screen TUI. Commands print formatted
+status and write auditable run artifacts and reports to disk. New users should start with the
+cross-platform [Quick start](docs/QUICKSTART.md).
 
 > **The model decides what information it needs. The harness decides whether another tool call is necessary, which provider may satisfy it, and how it is allowed to happen.**
 
@@ -61,6 +65,10 @@ line. The carried-forward defects, with their reasons, are listed in
 [docs/dev/IMPLEMENTATION.md](docs/dev/IMPLEMENTATION.md).
 
 ## Running it
+
+For a first installation and a complete deterministic investigation on Linux, macOS or Windows,
+follow the [Quick start](docs/QUICKSTART.md). The shorter reference commands below assume the
+repository development environment already exists.
 
 ### Install a release
 
