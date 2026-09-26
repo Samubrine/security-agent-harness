@@ -62,6 +62,33 @@ line. The carried-forward defects, with their reasons, are listed in
 
 ## Running it
 
+### Install a release
+
+The package supports Linux, macOS and Windows with Python 3.12 or newer. Download the `.whl`
+file from the desired entry on the repository's [Releases](https://github.com/Samubrine/security-agent-harness/releases)
+page, then install it with
+[`pipx`](https://pipx.pypa.io/) so the `harness` command is available without changing the system
+Python environment:
+
+```bash
+pipx install ./security_agent_harness-<version>-py3-none-any.whl
+harness --help
+harness doctor
+```
+
+`python -m pip install ./security_agent_harness-<version>-py3-none-any.whl` also works inside a
+virtual environment. The wheel is platform-independent; the release workflow installs and checks
+the exact same wheel on Linux, macOS and Windows before publishing it. `nmap` and Docker remain
+optional and are only needed for their corresponding providers and local lab.
+
+Maintainers publish a release by updating the version in `pyproject.toml` and
+`src/harness/__init__.py`, then pushing the matching tag (for example, version `0.2.0` uses tag
+`v0.2.0`). GitHub Actions runs the tests, builds the wheel and source archive, verifies installation
+on all three operating systems, and attaches the distributions plus SHA-256 checksums to the GitHub
+release.
+
+### Run from a source checkout
+
 The default planner is a deterministic local stand-in, so a full investigation runs on a machine
 with no model server, no scanner and no network:
 
