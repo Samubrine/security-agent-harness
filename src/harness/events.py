@@ -33,11 +33,12 @@ class EventLog:
     leaving it floating.
     """
 
-    def __init__(self, path: Path, run_id: str) -> None:
+    def __init__(self, path: Path, run_id: str, listener: Any = None) -> None:
         if not run_id:
             raise ValueError("an event log must belong to a run: run_id may not be empty")
         self._path = Path(path)
         self._run_id = run_id
+        self._listener = listener
 
     # -- writing ---------------------------------------------------------------------
 
@@ -67,6 +68,11 @@ class EventLog:
         # canonical_json of this same dump is what verify_chain re-derives from the file, so the
         # hash we commit and the hash a verifier recomputes are the same computation.
         append_jsonl(self._path, record.model_dump(mode="json"))
+        if self._listener is not None:
+            try:
+                self._listener(record)
+            except Exception:
+                pass
         return record
 
     # -- reading ---------------------------------------------------------------------

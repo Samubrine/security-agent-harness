@@ -78,6 +78,8 @@ class RunRequest:
     log_root: Path | None = None
     enable_memory_curation: bool = True
     extra_providers: tuple[Any, ...] = ()
+    api_key: str | None = None
+    event_listener: Any = None
 
     def resolved_runs_root(self) -> Path:
         return Path(self.runs_root) if self.runs_root else Path(self.root) / "runs"
@@ -363,6 +365,7 @@ def execute_run(request: RunRequest) -> RunArtifacts:
         endpoint=request.endpoint,
         allow_remote=request.allow_remote,
         script=Path(request.endpoint) if request.model_backend == "replay" and request.endpoint else None,
+        api_key=request.api_key,
     )
 
     config = RunConfig(
@@ -387,7 +390,7 @@ def execute_run(request: RunRequest) -> RunArtifacts:
     )
 
     store = ArtifactStore(run_dir, run_id, max_bytes=budgets.max_artifact_bytes)
-    events = EventLog(run_dir / "events.jsonl", run_id)
+    events = EventLog(run_dir / "events.jsonl", run_id, listener=request.event_listener)
     provenance = ProvenanceLog(run_dir / "provenance.jsonl")
     ledger = TokenLedger(run_dir / "trace.jsonl", model.metadata)
     guard = BudgetGuard(budgets)

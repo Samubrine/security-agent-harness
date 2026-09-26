@@ -286,6 +286,10 @@ def _resolve_scope(repo_root: Path, scenario: Scenario, override: Path | None) -
     """
     if override is not None:
         return Path(override).expanduser().resolve()
+    base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    signed_default = base / "security-agent-harness" / "lab_scope.signed.json"
+    if signed_default.is_file():
+        return signed_default.resolve()
     return (Path(repo_root) / scenario.scope_path).resolve()
 
 
@@ -387,6 +391,8 @@ def run_scenario(
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_s,
             check=False,
         )

@@ -21,6 +21,20 @@ from harness import __version__
 from harness.errors import HarnessError
 from harness.runtime.replay import Replayer
 from harness.runtime.runner import RunRequest, execute_run
+from harness.config import (
+    UserConfig,
+    get_config_path,
+    load_user_config,
+    save_user_config,
+)
+from harness.mcp_config import (
+    MCPServerEntry,
+    add_mcp_server,
+    load_mcp_servers,
+    remove_mcp_server,
+    toggle_mcp_server,
+)
+from harness.tui import InteractiveSession, ensure_dev_bootstrap, start_tui
 
 app = typer.Typer(
     add_completion=False,
@@ -30,7 +44,22 @@ app = typer.Typer(
 scope_app = typer.Typer(help="Sign and verify scope authorisation records.", no_args_is_help=True)
 app.add_typer(scope_app, name="scope")
 
-console = Console()
+mcp_app = typer.Typer(help="Manage Model Context Protocol (MCP) servers.", no_args_is_help=True)
+app.add_typer(mcp_app, name="mcp")
+
+config_app = typer.Typer(help="Inspect and update user preferences.", no_args_is_help=True)
+app.add_typer(config_app, name="config")
+
+if sys.platform == "win32":
+    try:
+        if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+console = Console(highlight=False)
 
 DEFAULT_SCOPE = Path("tests/fixtures/scope/lab_scope.json")
 
@@ -59,6 +88,7 @@ def run(
     approvals: Annotated[str, typer.Option("--approvals", help="deny | approve | scripted")] = "deny",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Render intentions without executing.")] = False,
     allow_remote: Annotated[bool, typer.Option("--allow-remote-egress", help="Permit a non-loopback model endpoint.")] = False,
+    api_key: Annotated[str | None, typer.Option("--api-key", help="API key for remote model authentication (or env).")] = None,
     run_id: Annotated[str | None, typer.Option("--run-id", help="Override the generated run id.")] = None,
     out: Annotated[Path | None, typer.Option("--out", help="Write the run directory exactly here instead of under runs/.")] = None,
     snapshot: Annotated[Path | None, typer.Option("--vuln-snapshot", help="Offline vulnerability snapshot.")] = None,
@@ -79,6 +109,7 @@ def run(
         approval_mode=approvals,
         dry_run=dry_run,
         allow_remote=allow_remote,
+        api_key=api_key,
         run_id=run_id,
         run_dir=out,
         snapshot_path=snapshot,
@@ -308,6 +339,110 @@ def eval_run(
     # `eval.runner.main` takes argv. The old call passed `scenario=`/`dry_run=` keywords, which is
     # a TypeError the CLI surfaced as a traceback rather than a run.
     raise typer.Exit(code=eval_main(argv))
+
+
+@app.command("interactive")
+def interactive_cmd() -> None:
+    """Launch the interactive terminal user interface."""
+    start_tui()
+
+
+@app.command("chat")
+def chat_cmd() -> None:
+    """Alias for interactive terminal session."""
+    start_tui()
+
+
+@app.command("init")
+def init_cmd() -> None:
+    """Initialize development authority keys and lab scope in ~/.config/security-agent-harness."""
+    scope_path, pub_path = ensure_dev_bootstrap()
+    console.print(f"[bold green][OK] Initialized authority keys and scope[/bold green]")
+    console.print(f"  Scope: [bold]{scope_path}[/bold]")
+    console.print(f"  Public key: [bold]{pub_path}[/bold]")
+
+
+@app.command("tools")
+def tools_cmd() -> None:
+    """List all security capabilities, registered providers, trust classes and risk."""
+    session = InteractiveSession(console)
+    session.cmd_tools()
+
+
+@mcp_app.command("list")
+def mcp_list() -> None:
+    """List configured MCP servers."""
+    session = InteractiveSession(console)
+    session.cmd_mcp("list")
+
+
+@mcp_app.command("add")
+def mcp_add(
+    name: Annotated[str, typer.Argument(help="Server name")],
+    command: Annotated[str, typer.Argument(help="Executable command")],
+    args: Annotated[list[str] | None, typer.Argument(help="Command arguments")] = None,
+) -> None:
+    """Add a new MCP server."""
+    add_mcp_server(MCPServerEntry(name=name, command=command, args=args or []))
+    console.print(f"[green][OK] Added MCP server '{name}'[/green]")
+
+
+@mcp_app.command("remove")
+def mcp_remove(name: Annotated[str, typer.Argument(help="Server name to remove")]) -> None:
+    """Remove a configured MCP server."""
+    if remove_mcp_server(name):
+        console.print(f"[green][OK] Removed MCP server '{name}'[/green]")
+    else:
+        console.print(f"[yellow]MCP server '{name}' not found[/yellow]")
+
+
+@mcp_app.command("toggle")
+def mcp_toggle(
+    name: Annotated[str, typer.Argument(help="Server name")],
+    enable: Annotated[bool, typer.Option("--enable/--disable", help="Enable or disable")] = True,
+) -> None:
+    """Enable or disable an MCP server."""
+    if toggle_mcp_server(name, enable):
+        console.print(f"[green][OK] Set '{name}' enabled={enable}[/green]")
+    else:
+        console.print(f"[yellow]MCP server '{name}' not found[/yellow]")
+
+
+@config_app.command("show")
+def config_show() -> None:
+    """Display current persistent configuration."""
+    cfg = load_user_config()
+    console.print(f"[bold]Configuration file:[/bold] {get_config_path()}")
+    table = Table(title="Harness User Configuration", border_style="cyan")
+    table.add_column("Key", style="bold cyan")
+    table.add_column("Value")
+    for k, v in sorted(cfg.model_dump().items()):
+        if k == "api_keys":
+            masked = {bk: (val[:3] + "..." + val[-3:] if len(val) > 6 else "***") for bk, val in v.items()}
+            table.add_row(k, json.dumps(masked))
+        else:
+            table.add_row(k, str(v) if v is not None else "(none)")
+    console.print(table)
+
+
+@config_app.command("set")
+def config_set(
+    key: Annotated[str, typer.Argument(help="Configuration field name")],
+    value: Annotated[str, typer.Argument(help="New value")],
+) -> None:
+    """Set a configuration value in ~/.config/security-agent-harness/config.json."""
+    cfg = load_user_config()
+    if not hasattr(cfg, key):
+        console.print(f"[red]Unknown configuration key '{key}'[/red]")
+        raise typer.Exit(code=1)
+    field_type = type(getattr(cfg, key))
+    if field_type is bool:
+        parsed_val = value.lower() in {"true", "1", "yes"}
+    else:
+        parsed_val = value
+    setattr(cfg, key, parsed_val)
+    save_user_config(cfg)
+    console.print(f"[green][OK] Set '{key}' = {parsed_val}[/green]")
 
 
 @app.command()

@@ -47,6 +47,7 @@ from harness.models import (
 from harness.context.spotlight import Spotlight
 from harness.providers.base import ProviderRequest, ProviderResult
 from harness.providers.necessity import CAPABILITY_OUTPUT_KINDS, cache_key
+from harness.policy.egress import classify_prompt_content, redact_for_egress
 from harness.policy.ports import render_window
 from harness.runtime.replan import follow_up_needs
 from harness.runtime.fsm import RunState, State
@@ -342,9 +343,26 @@ class InvestigationLoop:
                 "untrusted_blocks_rendered": blocks_rendered,
             },
         )
-        request_text = bundle.system + "\x00" + bundle.user
+        system_text = bundle.system
+        user_text = bundle.user
+        model_is_local = getattr(getattr(self.model, "metadata", None), "is_local", None)
+        if model_is_local is None:
+            model_is_local = getattr(self.config.model, "is_local", True)
+
+        if self.config.enable_remote_egress or not model_is_local:
+            classes = sorted(set(classify_prompt_content(system_text)) | set(classify_prompt_content(user_text)))
+            system_text, sys_count = redact_for_egress(system_text)
+            user_text, usr_count = redact_for_egress(user_text)
+            count = sys_count + usr_count
+            if count > 0:
+                self.events.append(
+                    "PROMPT_EGRESS_REDACTED",
+                    {"step": self.state.step, "classes": classes, "count": count},
+                )
+
+        request_text = system_text + "\x00" + user_text
         try:
-            response = self.model.complete(system=bundle.system, user=bundle.user, step=self.state.step)
+            response = self.model.complete(system=system_text, user=user_text, step=self.state.step)
         except ModelClientError as exc:
             self._end_run(
                 "failed",

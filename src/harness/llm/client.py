@@ -12,6 +12,7 @@ Two things are enforced here rather than documented as policy:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
@@ -84,12 +85,29 @@ class OpenAICompatClient:
         timeout_s: float = 120.0,
         allow_remote: bool = False,
         tokenizer_id: str = "heuristic-4chars",
+        api_key: str | None = None,
+        backend: str = "openai",
     ) -> None:
-        enforce_local(base_url, allow_remote=allow_remote, backend="openai")
+        enforce_local(base_url, allow_remote=allow_remote, backend=backend)
         self.base_url = base_url.rstrip("/")
         self._allow_remote = allow_remote
+        self.backend = backend
+        if not api_key:
+            for env_var in (
+                "HARNESS_API_KEY",
+                "OPENAI_API_KEY",
+                "DEEPSEEK_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "OPENROUTER_API_KEY",
+                "GROQ_API_KEY",
+            ):
+                val = os.getenv(env_var)
+                if val:
+                    api_key = val
+                    break
+        self.api_key = api_key
         self.metadata = ModelMetadata(
-            backend="openai",
+            backend=backend,
             model_id=model_id,
             context_window=context_window,
             tokenizer_id=tokenizer_id,
@@ -103,7 +121,7 @@ class OpenAICompatClient:
     def complete(self, *, system: str, user: str, step: int) -> ModelResponse:
         import httpx
 
-        enforce_local(self.base_url, allow_remote=self._allow_remote, backend="openai")
+        enforce_local(self.base_url, allow_remote=self._allow_remote, backend=self.backend)
         payload: dict[str, Any] = {
             "model": self.metadata.model_id,
             "messages": [
@@ -115,8 +133,16 @@ class OpenAICompatClient:
         }
         if self.seed is not None:
             payload["seed"] = self.seed
+        headers: dict[str, str] = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            resp = httpx.post(f"{self.base_url}/chat/completions", json=payload, timeout=self.timeout_s)
+            resp = httpx.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=self.timeout_s,
+            )
             resp.raise_for_status()
             body = resp.json()
         except Exception as exc:  # noqa: BLE001 - transport failures are all the same to the caller
@@ -210,6 +236,7 @@ def build_client(
     script: Path | None = None,
     allow_remote: bool = False,
     tokenizer_id: str = "heuristic-4chars",
+    api_key: str | None = None,
 ) -> ModelClient:
     """Construct a client. Unknown backends are a configuration error, not a fallback.
 
@@ -253,7 +280,45 @@ def build_client(
             context_window=context_window,
             allow_remote=allow_remote,
             tokenizer_id=tokenizer_id,
+            api_key=api_key,
+            backend=name,
+        )
+    if name == "deepseek":
+        return OpenAICompatClient(
+            base_url=endpoint or "https://api.deepseek.com/v1",
+            model_id=model_id,
+            temperature=temperature,
+            seed=seed,
+            context_window=context_window,
+            allow_remote=allow_remote,
+            tokenizer_id=tokenizer_id,
+            api_key=api_key,
+            backend="deepseek",
+        )
+    if name == "openrouter":
+        return OpenAICompatClient(
+            base_url=endpoint or "https://openrouter.ai/api/v1",
+            model_id=model_id,
+            temperature=temperature,
+            seed=seed,
+            context_window=context_window,
+            allow_remote=allow_remote,
+            tokenizer_id=tokenizer_id,
+            api_key=api_key,
+            backend="openrouter",
+        )
+    if name == "groq":
+        return OpenAICompatClient(
+            base_url=endpoint or "https://api.groq.com/openai/v1",
+            model_id=model_id,
+            temperature=temperature,
+            seed=seed,
+            context_window=context_window,
+            allow_remote=allow_remote,
+            tokenizer_id=tokenizer_id,
+            api_key=api_key,
+            backend="groq",
         )
     raise ConfigError(
-        f"unknown model backend {backend!r}; expected one of: scripted, replay, ollama, openai"
+        f"unknown model backend {backend!r}; expected one of: scripted, replay, ollama, openai, deepseek, openrouter, groq"
     )
