@@ -5,7 +5,7 @@ investigation capabilities are dropped in as *skills*, *native tools*, and *MCP 
 and a locally hosted LLM decides what to investigate next inside a deterministic, auditable
 runtime.
 
-This is a CLI, not a desktop GUI or an interactive full-screen TUI. Commands print formatted
+The investigation engine is a CLI, with an optional local browser dashboard for reviewing saved runs. Commands print formatted
 status and write auditable run artifacts and reports to disk. New users should start with the
 cross-platform [Quick start](docs/QUICKSTART.md).
 
@@ -65,6 +65,25 @@ line. The carried-forward defects, with their reasons, are listed in
 [docs/dev/IMPLEMENTATION.md](docs/dev/IMPLEMENTATION.md).
 
 ## Running it
+
+### Local browser dashboard
+
+After installing from source, start the dashboard from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m harness.dashboard
+```
+
+Open http://127.0.0.1:8765. On Linux/macOS use `.venv/bin/python -m harness.dashboard`.
+The dashboard reads `runs/` and lets you switch investigations, filter findings, inspect
+supporting observations and activity, and read or download the original Markdown report.
+Use Refresh records after running another investigation in the CLI. An empty workspace
+shows a getting-started message. Stop the server with Ctrl+C.
+
+It binds to loopback and only reads records; it does not launch investigations or expose signing
+keys. Use `--port 8766` to choose another port or `--runs <directory>` to view another run collection.
+Frontend files live in `src/harness/web/`: `index.html`, `style.css`, and `app.js`.
+Edit and refresh the browser to see changes; no frontend build or Node installation is required.
 
 For a first installation and a complete deterministic investigation on Linux, macOS or Windows,
 follow the [Quick start](docs/QUICKSTART.md). The shorter reference commands below assume the
