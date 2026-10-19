@@ -85,6 +85,16 @@ keys. Use `--port 8766` to choose another port or `--runs <directory>` to view a
 Frontend files live in `src/harness/web/`: `index.html`, `style.css`, and `app.js`.
 Edit and refresh the browser to see changes; no frontend build or Node installation is required.
 
+The dashboard is branded **AEGIS — Agentic Security Investigation System**. Appearance supports
+Light, Dark, and System modes; a browser-local preference remembers the selection. Overview
+separates confirmed and possible findings, charts severity counts, and derives milestones from
+the first matching recorded events. Missing stages are labelled as not recorded.
+
+Investigation trace provides recorded playback with play/pause, next-event, reset, speed, and
+scrubbing controls. It never executes tools. Original event timestamps are retained; playback
+spacing is clamped to 0.35–3 seconds at 1× for readability, rather than representing execution
+duration. Run frontend checks with `node --test tests/dashboard_frontend.cjs`.
+
 For a first installation and a complete deterministic investigation on Linux, macOS or Windows,
 follow the [Quick start](docs/QUICKSTART.md). The shorter reference commands below assume the
 repository development environment already exists.
