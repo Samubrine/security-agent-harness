@@ -74,7 +74,7 @@ class ChatControllerTest extends TestCase
             'content' => 'Explain CVE-2021-41773',
         ]);
 
-        $response->assertRedirect(route('chat.show', $session->id));
+        $response->assertRedirect(route('chat.show', $session->id).'#latest');
         $this->assertDatabaseHas('chat_messages', ['chat_session_id' => $session->id, 'role' => 'user', 'content' => 'Explain CVE-2021-41773']);
         $this->assertDatabaseHas('chat_messages', ['chat_session_id' => $session->id, 'role' => 'assistant', 'content' => 'CVE-2021-41773 is a **path traversal** bug (CVSS 7.5).']);
         $this->assertDatabaseHas('tool_execution_logs', ['tool_name' => 'lookup_cve', 'status' => 'success', 'loggable_type' => KnowledgeSource::class]);

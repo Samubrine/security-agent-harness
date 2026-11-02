@@ -96,6 +96,53 @@ class RunArchive
         ];
     }
 
+    /**
+     * Every recorded run's run.json plus its directory name, newest first. This is the shape the
+     * investigation workspace (resources/js/workspace.js) expects.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function records(): array
+    {
+        $runs = [];
+        foreach (glob($this->runsDir.DIRECTORY_SEPARATOR.'run-*', GLOB_ONLYDIR) ?: [] as $dir) {
+            if (is_link($dir)) {
+                continue;
+            }
+            $run = $this->readJson($dir.'/run.json');
+            if (is_array($run)) {
+                $runs[] = $run + ['directory' => basename($dir)];
+            }
+        }
+        usort($runs, fn ($a, $b) => strcmp((string) ($b['created_at'] ?? ''), (string) ($a['created_at'] ?? '')));
+
+        return $runs;
+    }
+
+    /**
+     * Everything the workspace shows for one run.
+     *
+     * @return array<string, mixed>
+     *
+     * @throws HarnessException
+     */
+    public function full(string $runId): array
+    {
+        $dir = $this->dirFor($runId);
+        if ($dir === null || ! is_file($dir.'/run.json')) {
+            throw new HarnessException("No investigation with run_id `{$runId}`.");
+        }
+
+        return [
+            'run' => $this->readJson($dir.'/run.json') ?? [],
+            'findings' => $this->readJson($dir.'/findings.json') ?? [],
+            'observations' => $this->readJson($dir.'/observations.json') ?? [],
+            'events' => $this->readJsonl($dir.'/events.jsonl'),
+            'gaps' => $this->readJsonl($dir.'/gaps.jsonl'),
+            'report' => is_file($dir.'/report.md') ? (string) file_get_contents($dir.'/report.md') : 'Report not available yet.',
+        ];
+    }
+
     private function dirFor(string $runId): ?string
     {
         if (! preg_match('/^run-[A-Za-z0-9T-]{4,64}$/', $runId)) {
