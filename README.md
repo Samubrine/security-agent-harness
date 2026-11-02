@@ -32,6 +32,34 @@ precision, recall, hallucination, evidence-binding and scope-compliance targets
 
 ---
 
+## 🤖 Chat Agen AI: LLM + Harness dalam satu aplikasi
+
+Aplikasi Laravel adalah antarmuka; **LLM** (`qwen3:14b` lewat gateway LLM ITS, atau endpoint OpenAI-compatible lain via `.env`) adalah otaknya; **harness Python** dan **database CVE publik NVD** adalah alatnya. Model sendiri yang memutuskan alat mana yang dipanggil dan kapan jawabannya sudah cukup. Itulah bagian *agentic*-nya.
+
+```mermaid
+flowchart LR
+    U[Operator] -->|pertanyaan| C[ChatSessionController]
+    C --> A[AgentRunner<br/>loop maks. 6 langkah]
+    A <-->|messages + tools| L[(LLM gateway<br/>qwen3:14b)]
+    A -->|tool call| T{ToolRegistry}
+    T --> R[run_investigation] -->|subprocess| H[Harness Python<br/>scope bertanda tangan, policy, bukti]
+    T --> LI[list_investigations /<br/>get_investigation] --> F[(Arsip temuan<br/>storage/app/harness-runs)]
+    T --> N[lookup_cve /<br/>search_cves] --> V[(NIST NVD API)]
+    A -->|setiap pemanggilan| DB[(tool_execution_logs<br/>polymorphic)]
+```
+
+| Alat | Fungsi | Pemilik polimorfik (`loggable`) |
+|---|---|---|
+| `run_investigation` | Menjalankan investigasi baru (`port_scan`, `log_analysis`, `entry_point`) pada target di scope lab | `SecurityScanner` / `LogAnalyzer` |
+| `list_investigations`, `get_investigation` | Membaca hasil investigasi sebelumnya agar tidak mengulang pekerjaan | `KnowledgeSource` (arsip temuan) |
+| `lookup_cve`, `search_cves` | Informasi publik: skor CVSS, jenis kelemahan (CWE), status *known exploited* CISA, tautan patch | `KnowledgeSource` (NVD) |
+
+Contoh rantai otomatis untuk *"Apakah lab-web-01 aman?"*: `run_investigation(port_scan)`, lalu `lookup_cve` untuk CVE paling kritis yang ditemukan, lalu jawaban yang menyebut `run_id`, membedakan temuan *confirmed* dan *possible*, dan memberi langkah perbaikan.
+
+Batas keamanan: model hanya memilih **alat** dan **alias target** (`lab-web-01`, `lab-logs`, ...). Laravel memvalidasi argumen, harness memverifikasi scope bertanda tangan, dan output alat diperlakukan sebagai data tak tepercaya (banner di lab sengaja berisi *prompt injection*). Penalaran model (`<think>`) disimpan di `chat_messages.reasoning` dan bisa dibuka di UI. Kode: `app/Agent/`, konfigurasi: `config/agent.php`. Detail desain: [docs/design/09-agentic-chat.md](docs/design/09-agentic-chat.md).
+
+---
+
 ## 🗄️ Pemodelan Basis Data Relasional & ERD (Tugas Pertemuan 9 - PBKK)
 
 Bagian ini mendokumentasikan hasil rancangan dan implementasi basis data relasional di Laravel untuk mendukung fitur kompleks pada **Proyek Kelompok Platform Agentic AI**.
@@ -60,6 +88,7 @@ erDiagram
     TOOL_EXECUTION_LOGS }o--|| SECURITY_SCANNERS : "morphs_to"
     TOOL_EXECUTION_LOGS }o--|| MALWARE_SCANNERS : "morphs_to"
     TOOL_EXECUTION_LOGS }o--|| LOG_ANALYZERS : "morphs_to"
+    TOOL_EXECUTION_LOGS }o--|| KNOWLEDGE_SOURCES : "morphs_to"
 
     USERS {
         bigint id PK
@@ -88,6 +117,7 @@ erDiagram
         bigint chat_session_id FK
         string role
         text content
+        text reasoning
         integer token_count
         integer sequence_number
         timestamp created_at
@@ -137,6 +167,16 @@ erDiagram
         string pattern_ruleset
         string severity_threshold
         string version
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    KNOWLEDGE_SOURCES {
+        bigint id PK
+        string name
+        string source_type
+        string provider
+        string endpoint
         timestamp created_at
         timestamp updated_at
     }
@@ -226,30 +266,39 @@ Aplikasi menyediakan tombol switch langsung pada antarmuka `/chat/{id}` untuk me
 
 ---
 
-### 🚀 Cara Menjalankan Aplikasi Web Laravel
+### 🚀 Cara Menjalankan Aplikasi (Laravel + Harness + LLM)
 
 ```bash
-# 1. Masuk ke direktori proyek dan instal dependensi composer & npm
+# 1. Dependensi PHP & JS
 composer install
 npm install
 
-# 2. Siapkan file environment dan buat application key
+# 2. Harness Python (dipanggil oleh agen chat sebagai subprocess)
+python -m venv .venv
+.venv\Scripts\activate            # Windows  (Linux/macOS: source .venv/bin/activate)
+python -m pip install -e ".[dev]"
+python -m scripts.gen_scope_keypair --skip-if-exists
+python -m scripts.sign_lab_scope    # membuat scope lab yang ditandatangani
+
+# 3. Environment: isi LLM_API_KEY dengan key gateway LLM ITS kelompok (JANGAN di-commit)
 cp .env.example .env
 php artisan key:generate
 
-# 3. Jalankan migrasi dan seeder data relasional dummy
+# 4. Database: akun + pemilik alat polimorfik
 php artisan migrate:fresh --seed
+#    (opsional) data contoh Pertemuan 9 untuk demo N+1:
+php artisan db:seed --class=Week9DemoSeeder
 
-# 4. Bangun aset frontend
+# 5. Frontend & server
 npm run build
-
-# 5. Jalankan server lokal Laravel
 php artisan serve
 ```
 
 Akses di browser:
-- **Aplikasi Obrolan & Relasi AI:** `http://127.0.0.1:8000/chat`
+- **Aplikasi Chat Agen AI:** `http://127.0.0.1:8000/chat`
 - **Akun Operator Demo:** Email: `test@example.com` | Password: `password`
+
+> Jika jawaban agen berisi *"The language model could not be reached"*, cek `LLM_API_KEY` di `.env` dan pastikan laptop bisa mengakses `senopati.its.ac.id` (mungkin perlu jaringan/VPN ITS).
 
 ---
 
@@ -260,7 +309,7 @@ Akses di browser:
 php artisan test
 
 # Hasil pengujian:
-# 36 passed, 125 assertions (100% Pass)
+# 53 passed (LLM, NVD, dan harness dipalsukan dengan Http::fake / Process::fake)
 
 # Verifikasi kepatuhan gaya penulisan PSR-12 via Laravel Pint
 php vendor/bin/pint --test
@@ -422,6 +471,7 @@ than failing the run, and the deterministic fixture-backed provider answers the 
 | [06-implementation-roadmap.md](docs/design/06-implementation-roadmap.md) | Vertical slice, milestones, week-by-week plan |
 | [07-evaluation-plan.md](docs/design/07-evaluation-plan.md) | Lab targets, ground truth, metrics, ablations, injections |
 | [08-local-first-memory-and-routing.md](docs/design/08-local-first-memory-and-routing.md) | Local model contract, memory lifecycle, multi-provider necessity gate, v2 token optimizer |
+| [09-agentic-chat.md](docs/design/09-agentic-chat.md) | Laravel chat agent: LLM tool loop over the harness, findings archive and NVD; trust boundaries |
 | [decisions.md](docs/design/decisions.md) | ADR log — numbered decisions with status |
 
 ## Headline decisions

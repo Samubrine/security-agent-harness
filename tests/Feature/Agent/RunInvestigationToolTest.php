@@ -71,6 +71,31 @@ class RunInvestigationToolTest extends TestCase
         $this->assertStringContainsString('could not find a JSON object', $result['planner_note']);
     }
 
+    public function test_an_llm_planned_run_that_does_not_complete_is_rerun_with_the_scripted_planner(): void
+    {
+        // What the real harness does when the model keeps returning unparseable plans: exit 0,
+        // status budget_exhausted, no findings.
+        config(['agent.harness.planner' => 'llm']);
+        Process::fake(function (PendingProcess $process) {
+            $cmd = $process->command;
+            $runId = $cmd[array_search('--run-id', $cmd, true) + 1];
+            if (in_array('--allow-remote-egress', $cmd, true)) {
+                return Process::result(output: json_encode(['run_id' => $runId, 'status' => 'budget_exhausted', 'findings' => 0,
+                    'stop_reason' => 'budget exhausted: max_consecutive_failures=3 reached (3 in a row)']));
+            }
+            File::copyDirectory(base_path('tests/fixtures/run/port_scan'), $cmd[array_search('--out', $cmd, true) + 1]);
+
+            return Process::result(output: json_encode(['run_id' => $runId, 'status' => 'completed']));
+        });
+
+        $result = app(RunInvestigationTool::class)->execute(['skill' => 'port_scan', 'target' => 'lab-web-01', 'objective' => 'x']);
+
+        $this->assertSame('scripted', $result['planner']);
+        $this->assertStringContainsString('budget_exhausted', $result['planner_note']);
+        $this->assertCount(5, $result['findings']);
+        Process::assertRanTimes(fn () => true, 2);
+    }
+
     public function test_targets_outside_the_scope_are_refused_before_the_harness_runs(): void
     {
         Process::fake();
