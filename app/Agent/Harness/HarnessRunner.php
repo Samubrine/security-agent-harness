@@ -2,6 +2,7 @@
 
 namespace App\Agent\Harness;
 
+use App\Agent\Progress;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
 
@@ -12,7 +13,8 @@ use Illuminate\Support\Str;
  */
 class HarnessRunner
 {
-    public const SKILLS = ['port_scan', 'log_analysis', 'entry_point'];
+    /** How often the run's event log is read for live progress, in microseconds. */
+    private const POLL_US = 150_000;
 
     /**
      * @param  array<string, mixed>  $config  config('agent.harness')
@@ -21,11 +23,17 @@ class HarnessRunner
     public function __construct(
         private readonly array $config,
         private readonly array $llm,
+        private readonly ?Progress $progress = null,
     ) {}
 
     public static function fromConfig(): self
     {
-        return new self(config('agent.harness'), config('agent.llm'));
+        return new self(config('agent.harness'), config('agent.llm'), app(Progress::class));
+    }
+
+    public function skills(): SkillCatalog
+    {
+        return new SkillCatalog($this->config['skills_dir'] ?? base_path('src/harness/skills'));
     }
 
     public function scope(): Scope
@@ -41,9 +49,13 @@ class HarnessRunner
     /**
      * @throws HarnessException
      */
-    public function run(string $skill, string $objective, ?string $target = null): HarnessRun
+    /**
+     * @param  list<bool>  $approvals  answers to the harness's approval requests, in order; empty
+     *                                 means no human is attached and every request is declined
+     */
+    public function run(string $skill, string $objective, ?string $target = null, array $approvals = []): HarnessRun
     {
-        if (! in_array($skill, self::SKILLS, true)) {
+        if (! in_array($skill, $this->skills()->names(), true)) {
             throw new HarnessException("Unknown skill `{$skill}`.");
         }
 
@@ -55,7 +67,7 @@ class HarnessRunner
             // (e.g. "budget_exhausted" after three unparseable proposals, with zero findings).
             // Either way, rerun with the deterministic planner and say so in the result.
             try {
-                $run = $this->invoke($skill, $objective, $target, 'llm');
+                $run = $this->invoke($skill, $objective, $target, 'llm', $approvals);
                 if (($run->summary['status'] ?? null) === 'completed') {
                     return $run;
                 }
@@ -64,15 +76,18 @@ class HarnessRunner
             } catch (HarnessException $e) {
                 $why = 'LLM planner failed: '.$e->getMessage();
             }
-            $run = $this->invoke($skill, $objective, $target, 'scripted');
+            $run = $this->invoke($skill, $objective, $target, 'scripted', $approvals);
 
             return new HarnessRun($run->runId, $run->runDir, $run->summary, 'scripted', Str::limit($why, 300));
         }
 
-        return $this->invoke($skill, $objective, $target, 'scripted');
+        return $this->invoke($skill, $objective, $target, 'scripted', $approvals);
     }
 
-    private function invoke(string $skill, string $objective, ?string $target, string $planner): HarnessRun
+    /**
+     * @param  list<bool>  $approvals
+     */
+    private function invoke(string $skill, string $objective, ?string $target, string $planner, array $approvals = []): HarnessRun
     {
         $runId = 'run-'.now()->utc()->format('Ymd\THis').'-'.Str::lower(Str::random(4));
         $runDir = $this->runsDir().DIRECTORY_SEPARATOR.$runId;
@@ -93,6 +108,16 @@ class HarnessRunner
         if ($target !== null && $target !== '') {
             array_push($command, '--target', $target);
         }
+        if (! empty($this->config['strict'])) {
+            $command[] = '--strict';
+        }
+        $mcp = (string) ($this->config['mcp_config'] ?? '');
+        if ($mcp !== '' && is_file($mcp)) {
+            array_push($command, '--mcp-config', $mcp);
+        }
+        if ($approvals !== []) {
+            array_push($command, '--approvals', 'scripted', '--approval-answers', implode(',', array_map(fn ($a) => $a ? 'yes' : 'no', $approvals)));
+        }
 
         $env = [
             'PYTHONPATH' => $this->config['root'].DIRECTORY_SEPARATOR.'src',
@@ -111,10 +136,22 @@ class HarnessRunner
             $env['HARNESS_MODEL_API_KEY'] = (string) $this->llm['api_key'];
         }
 
-        $result = Process::path($this->config['root'])
+        $this->progress?->emit(['type' => 'harness', 'label' => 'Started the harness'.($planner === 'llm' ? ' (AI planner)' : '').' for '.str_replace('_', ' ', $skill).($target ? ' on '.$target : '')]);
+
+        // Started, not run: while it works, its append-only event log is read so the chat can show
+        // each step live (scope verified, plan, policy decision, provider started...).
+        $process = Process::path($this->config['root'])
             ->env($env)
             ->timeout($this->config['timeout'])
-            ->run($command);
+            ->start($command);
+        $events = $runDir.DIRECTORY_SEPARATOR.'events.jsonl';
+        $offset = 0;
+        while ($process->running()) {
+            $offset = $this->relayEvents($events, $offset);
+            usleep(self::POLL_US);
+        }
+        $result = $process->wait();
+        $this->relayEvents($events, $offset);
 
         $summary = $this->parseSummary($result->output());
         if (! $result->successful() || $summary === null) {
@@ -123,6 +160,40 @@ class HarnessRunner
         }
 
         return new HarnessRun($summary['run_id'] ?? $runId, $runDir, $summary, $planner);
+    }
+
+    /**
+     * Turn new lines of the run's event log into progress events. Returns the new byte offset.
+     */
+    private function relayEvents(string $file, int $offset): int
+    {
+        if ($this->progress === null || ! is_file($file)) {
+            return $offset;
+        }
+        clearstatcache(true, $file);
+        $size = (int) filesize($file);
+        if ($size <= $offset) {
+            return $offset;
+        }
+        $handle = fopen($file, 'rb');
+        if ($handle === false) {
+            return $offset;
+        }
+        fseek($handle, $offset);
+        $chunk = (string) fread($handle, $size - $offset);
+        fclose($handle);
+        $complete = strrpos($chunk, "\n");
+        if ($complete === false) {
+            return $offset; // a line still being written; read it next time
+        }
+        foreach (explode("\n", substr($chunk, 0, $complete)) as $line) {
+            $event = json_decode($line, true);
+            if (is_array($event) && ($label = HarnessEvents::label($event)) !== null) {
+                $this->progress->emit(['type' => 'harness', 'label' => $label, 'event' => $event['type'] ?? null]);
+            }
+        }
+
+        return $offset + $complete + 1;
     }
 
     /**

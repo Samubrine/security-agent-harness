@@ -26,6 +26,7 @@
         </div>
     </div>
 
+    <div x-data="agentChat">
     <section class="panel content">
         <div class="conversation">
             @foreach ($messages as $msg)
@@ -62,24 +63,42 @@
                         @endif
 
                         <div class="rendered-report">{!! $md($msg->content) !!}</div>
+
+                        @include('chat.partials.fact-check', ['check' => $msg->claim_check])
+                        @if (is_array($msg->pending_action))
+                            @include('chat.partials.pending-action', ['action' => $msg->pending_action, 'message' => $msg, 'isLatest' => $msg->id === $lastId])
+                        @endif
                     </article>
                 @endif
             @endforeach
         </div>
     </section>
 
-    <section class="panel composer" x-data="{ busy: false, send(form) { if (form.content.value.trim().length < 2) return; this.busy = true; form.submit(); } }">
+    <section class="panel composer">
         @error('content')<p class="field-error" style="margin:0 0 10px">{{ $message }}</p>@enderror
-        <form method="POST" action="{{ route('chat.message', $chatSession->id) }}" @submit.prevent="send($el)">
+        @if (session('error'))<p class="field-error" style="margin:0 0 10px">{{ session('error') }}</p>@endif
+        <div class="live" x-ref="live" x-show="busy || error" x-cloak aria-live="polite">
+            <div class="working" x-show="busy"><span class="spinner"></span> The agent is working. Each step appears here as it happens.</div>
+            <ol class="live-steps">
+                <template x-for="(s, i) in steps" :key="i">
+                    <li class="live-step" :class="[s.kind, s.state]">
+                        <span class="live-dot" aria-hidden="true"></span>
+                        <span class="live-label" x-text="s.label + (s.count > 1 ? ' (×' + s.count + ')' : '')"></span>
+                        <span class="live-result" x-show="s.result" x-text="s.result"></span>
+                    </li>
+                </template>
+            </ol>
+            <p class="field-error" x-show="error" x-text="error"></p>
+        </div>
+        <form method="POST" action="{{ route('chat.message', $chatSession->id) }}" @submit.prevent="run($el)">
             @csrf
-            <div class="working" x-show="busy" x-cloak><span class="spinner"></span> The agent is working: choosing tools, running the investigation, reading results. This can take a minute.</div>
             <div class="chips" x-show="!busy">
                 @foreach ([
                     'Is lab-web-01 safe? Check it and explain the most serious risks.',
+                    'Was Tomcat on lab-web-01 really patched? Check against the asset inventory.',
+                    'Scan the web server.',
                     'Analyse lab-logs. Did someone break in?',
-                    'How could an attacker get into the lab? Correlate everything.',
                     'What have we found so far?',
-                    'Explain CVE-2021-41773 in simple terms.',
                 ] as $prompt)
                     <button type="button" class="button small" @click="$refs.input.value = @js($prompt); $refs.input.focus()">{{ $prompt }}</button>
                 @endforeach
@@ -89,13 +108,14 @@
                     <label class="small-label field-label" for="messageInput">MESSAGE</label>
                     <textarea id="messageInput" x-ref="input" class="field" name="content" rows="2" required maxlength="4000" :readonly="busy"
                         placeholder="Ask the agent, e.g. “Apakah lab-web-01 aman?”"
-                        @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send($el.form) }">{{ old('content') }}</textarea>
+                        @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); run($el.form) }">{{ old('content') }}</textarea>
                 </div>
                 <button type="submit" class="button primary" :disabled="busy"><span x-text="busy ? 'Working…' : 'Send'">Send</span></button>
             </div>
             <p class="hint" style="margin-top:8px">Enter to send · Shift+Enter for a new line · Investigations only run against the signed lab scope.</p>
         </form>
     </section>
+    </div>
 
     {{-- Week 9 (relational modelling): eager loading vs N+1 on this page's own query. --}}
     <details class="panel inspector" @if($mode === 'lazy') open @endif>

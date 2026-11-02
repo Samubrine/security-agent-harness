@@ -102,7 +102,25 @@ why. The answer must not depend on a 14B model writing perfect JSON in a demo.
 * `search_cves` is NVD keyword search. Its results are candidates, not proof that a host is
   affected, and the system prompt says so.
 
-## 7. Tests
+## 7. Closing the gaps to the original design
+
+The first idea for this project (skill → context resolver → planner → policy → tools/MCP →
+evidence → memory → reporter, with a live progress view) was compared against the implementation.
+Five gaps were closed:
+
+| Design element | Implementation |
+|---|---|
+| **Live progress** ("✓ context resolved, ● analysing…") | The chat request streams NDJSON events while it runs (`ChatSessionController::answer`). `HarnessRunner` starts the harness and tails its hash-chained `events.jsonl`, so each harness step (scope verified, plan, necessity gate, policy verdict, provider started, cross-check) appears as it happens. Streaming one response, not polling, is what works on the single-threaded `php artisan serve`. |
+| **Policy "ask" → user approval** | The harness already routes risky calls to a human. A web request cannot keep the subprocess waiting, so the first run fails closed (declined, recorded as a `rejected_by_user` gap); `RunArchive` reports the request with the policy's reason; the chat shows Approve / Decline. Approving stores scripted answers (`ApprovalLedger`) and the agent reruns with `--approvals scripted --approval-answers yes`; requests the operator did not see are still declined. |
+| **Context resolver asks for missing input** | Skills declare required inputs in YAML. `RunInvestigationTool` reads them (`SkillCatalog`); if a target is missing or invalid it raises `NeedsContext`, the loop stops without asking the model to guess, and the chat shows a form whose options come from the signed scope. |
+| **Evidence, not "the LLM thinks"** | Every successful tool result is stored as an `EvidenceArtifact` (SHA-256 over canonical JSON). After the answer, `ClaimChecker` deterministically checks every CVE id, CVSS score, run id and "exploited in the wild" claim against those artifacts and shows a fact check under the answer. |
+| **MCP + a new skill without runtime changes** | `config/mcp_servers.json` registers `mcp_servers/asset_inventory.py` (a real MCP stdio server) as a provider for `service.enumerate`, MEDIUM risk, untrusted output. The new skill `src/harness/skills/version_check.yaml` requires two independent sources, so the scan and the inventory are compared: ports 22/80 agree, port 8080 conflicts (inventory says Tomcat 9.0.31, scan sees 9.0.30). The skill appears in the chat automatically. |
+
+Two harness fixes were needed and are tested: corroboration now really picks a second *trust
+class* (it used to pick a second local scanner), and the correlator treats a scope alias and its
+address as the same machine (the MCP server only ever sees the alias).
+
+## 8. Tests
 
 `tests/Feature/Agent/*` and `tests/Feature/ChatControllerTest.php` run the loop against
 `Http::fake` (LLM, NVD) and `Process::fake` (harness). They cover tool chaining, error feedback,

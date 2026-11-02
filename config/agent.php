@@ -60,6 +60,12 @@ return [
         // llm:      the harness plans with the same LLM as the chat, and falls back to the
         //           scripted planner if the model cannot produce a valid plan.
         'planner' => env('HARNESS_PLANNER', 'llm'),
+        // Ask the operator before MEDIUM-risk harness calls as well as HIGH-risk ones. The shipped
+        // MCP server (asset inventory) is MEDIUM, so with this on it never runs without an OK.
+        'strict' => (bool) env('HARNESS_STRICT', true),
+        // MCP servers the harness starts and registers as providers (see mcp_servers/).
+        'mcp_config' => env('HARNESS_MCP_CONFIG', base_path('config/mcp_servers.json')),
+        'skills_dir' => env('HARNESS_SKILLS_DIR', base_path('src/harness/skills')),
     ],
 
     // Public vulnerability information: NIST National Vulnerability Database, CVE API 2.0.

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Agent\AgentRunner;
+use App\Agent\ApprovalLedger;
 use App\Agent\Harness\RunArchive;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
@@ -11,6 +12,8 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 use Illuminate\View\View;
 
 class ChatSessionController extends Controller
@@ -73,6 +76,7 @@ class ChatSessionController extends Controller
                     $query->orderBy('sequence_number', 'asc')->orderBy('created_at', 'asc');
                 },
                 'chatMessages.toolExecutionLogs.loggable',
+                'chatMessages.toolExecutionLogs.evidenceArtifacts',
             ])->whereBelongsTo($request->user())->findOrFail($id);
         }
 
@@ -119,30 +123,114 @@ class ChatSessionController extends Controller
      * The LLM decides which tools to call (harness investigations, findings archive, NVD); each
      * call is stored as a polymorphic ToolExecutionLog on the assistant's reply.
      */
-    public function sendMessage(Request $request, int $id, AgentRunner $agent): RedirectResponse
+    public function sendMessage(Request $request, int $id, AgentRunner $agent): Response
     {
         $validated = $request->validate([
             'content' => 'required|string|min:2|max:4000',
         ]);
 
         $session = $this->ownedSession($request, $id);
+        $this->addUserMessage($session, $validated['content']);
 
+        return $this->answer($request, $session, $agent);
+    }
+
+    /**
+     * The operator answers what the agent was waiting for: approve or decline a harness step, or
+     * supply missing context (which machine?). The answer becomes a chat message, so the agent
+     * (and anyone reading the conversation later) sees exactly what was decided.
+     */
+    public function resolveAction(Request $request, int $id, int $message, AgentRunner $agent, ApprovalLedger $ledger): Response
+    {
+        $session = $this->ownedSession($request, $id);
+        $assistant = $session->chatMessages()->where('role', 'assistant')->findOrFail($message);
+        $action = $assistant->pending_action;
+        if (! is_array($action) || isset($action['resolved'])) {
+            return redirect()->to(route('chat.show', $session->id).'#latest')->with('error', 'That question has already been answered.');
+        }
+
+        $skill = str_replace('_', ' ', (string) ($action['skill'] ?? 'investigation'));
+        if ($action['type'] === 'approval') {
+            $decision = $request->validate(['decision' => 'required|in:approve,decline'])['decision'];
+            $tools = collect($action['requests'] ?? [])->pluck('provider')->unique()->implode(' and ');
+            if ($decision === 'approve') {
+                // One "yes" per request the operator saw; anything new in the rerun is still declined.
+                $ledger->grant((string) $action['skill'], $action['target'] ?? null, array_fill(0, count($action['requests'] ?? []), true));
+                $text = "I approve using {$tools} for the {$skill}".(! empty($action['target']) ? " on {$action['target']}" : '').'. Run it again with my approval and tell me what it finds.';
+            } else {
+                $text = "I decline: do not use {$tools}. Continue without it and tell me what that leaves unknown.";
+            }
+            $resolution = $decision;
+        } else {
+            $field = $action['fields'][0] ?? ['name' => 'target', 'options' => []];
+            $value = $request->validate([$field['name'] => ['required', 'string', 'in:'.implode(',', $field['options'])]])[$field['name']];
+            $text = "Use {$value} for the {$skill}.".(! empty($action['objective']) ? ' Goal: '.$action['objective'] : '');
+            $resolution = $value;
+        }
+
+        $assistant->update(['pending_action' => $action + ['resolved' => $resolution, 'resolved_at' => now()->toIso8601String()]]);
+        $this->addUserMessage($session, $text);
+
+        return $this->answer($request, $session, $agent);
+    }
+
+    private function addUserMessage(ChatSession $session, string $content): void
+    {
         ChatMessage::create([
             'chat_session_id' => $session->id,
             'role' => 'user',
-            'content' => $validated['content'],
-            'token_count' => (int) ceil(mb_strlen($validated['content']) / 4),
+            'content' => $content,
+            'token_count' => (int) ceil(mb_strlen($content) / 4),
             'sequence_number' => (int) $session->chatMessages()->max('sequence_number') + 1,
         ]);
+    }
 
+    /**
+     * Run the agent. A browser that asks for NDJSON gets every step as it happens (one JSON object
+     * per line); anything else waits and is redirected to the conversation. Streaming the same
+     * response, rather than polling a second URL, is what makes live progress work on the
+     * single-threaded `php artisan serve`.
+     */
+    private function answer(Request $request, ChatSession $session, AgentRunner $agent): Response
+    {
         // An investigation plus several LLM turns can take a minute or two.
-        set_time_limit((int) config('agent.harness.timeout') + 6 * (int) config('agent.llm.timeout'));
+        set_time_limit(2 * (int) config('agent.harness.timeout') + 6 * (int) config('agent.llm.timeout'));
 
-        $agent->respond($session);
-        // Touch the session so the most recently used conversation is listed first.
-        $session->touch();
+        if (! str_contains((string) $request->header('Accept'), 'application/x-ndjson')) {
+            $agent->respond($session);
+            // Touch the session so the most recently used conversation is listed first.
+            $session->touch();
 
-        return redirect()->to(route('chat.show', $session->id).'#latest');
+            return redirect()->to(route('chat.show', $session->id).'#latest');
+        }
+
+        return response()->stream(function () use ($session, $agent) {
+            ignore_user_abort(true); // closing the tab must not leave a half-written reply
+            if (! app()->runningUnitTests()) {
+                while (ob_get_level() > 0) {
+                    ob_end_flush();
+                }
+            }
+            $send = function (array $event): void {
+                echo json_encode($event, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE)."\n";
+                if (! app()->runningUnitTests()) {
+                    flush();
+                }
+            };
+            $send(['type' => 'started']);
+            try {
+                $reply = $agent->respond($session, $send);
+                $session->touch();
+                $send(['type' => 'done', 'url' => route('chat.show', ['id' => $session->id, 'reply' => $reply->id]).'#latest']);
+            } catch (Throwable $e) {
+                report($e);
+                $send(['type' => 'error', 'message' => 'The agent stopped with an error: '.Str::limit($e->getMessage(), 200)]);
+            }
+        }, 200, [
+            'Content-Type' => 'application/x-ndjson; charset=utf-8',
+            'Cache-Control' => 'no-cache, no-transform',
+            'X-Accel-Buffering' => 'no',
+        ]);
     }
 
     /**

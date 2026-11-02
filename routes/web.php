@@ -19,6 +19,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/chat', [ChatSessionController::class, 'store'])->name('chat.store');
     Route::get('/chat/{id}', [ChatSessionController::class, 'show'])->name('chat.show');
     Route::post('/chat/{id}/message', [ChatSessionController::class, 'sendMessage'])->name('chat.message');
+    Route::post('/chat/{id}/messages/{message}/resolve', [ChatSessionController::class, 'resolveAction'])->name('chat.resolve');
 
     // Investigation workspace (the harness dashboard) and its JSON records
     Route::get('/investigations', [InvestigationController::class, 'index'])->name('investigations.index');

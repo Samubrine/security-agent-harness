@@ -89,11 +89,94 @@ class RunArchive
                 'more_evidence' => max(0, count($f['claims'] ?? []) - $claimLimit),
                 'explanation' => $detailed ? ($f['narrative'] ?? null) : null,
             ], $findings),
+            'cross_checks' => $this->crossChecks($dir),
+            'approvals' => $approvals = $this->approvals($dir),
+            // Requests that were declined only because nobody was there to answer: the operator can
+            // approve them and run the investigation again.
+            'approval_needed' => array_values(array_filter($approvals, fn ($a) => $a['awaiting_operator'])),
             'evidence_gaps' => array_map(fn ($g) => [
                 'kind' => $g['kind'] ?? null,
                 'impact' => Str::limit((string) ($g['impact'] ?? ''), 300),
             ], array_slice($gaps, 0, $detailed ? 10 : 3)),
         ];
+    }
+
+    /**
+     * Where two independent providers described the same thing: did they agree?
+     *
+     * @return list<array{subject: string, relation: string, sources: list<array{provider: string, version: ?string}>}>
+     */
+    private function crossChecks(string $dir): array
+    {
+        $rows = $this->readJsonl($dir.'/correlations.jsonl');
+        if ($rows === []) {
+            return [];
+        }
+        $observations = collect($this->readJson($dir.'/observations.json') ?? [])->keyBy('id');
+
+        return array_map(fn ($c) => [
+            'subject' => HarnessEvents::subject((string) ($c['key'] ?? '')),
+            'relation' => (string) ($c['relation'] ?? ''),
+            'sources' => array_values(array_map(fn ($id) => [
+                'provider' => HarnessEvents::provider((string) ($observations[$id]['provider'] ?? '?')),
+                'version' => $observations[$id]['value']['version'] ?? null,
+            ], $c['observation_ids'] ?? [])),
+        ], $rows);
+    }
+
+    /**
+     * Approval requests the harness raised, with the policy's reason and the answer.
+     *
+     * @return list<array{provider: string, provider_id: string, capability: string, reason: string, approved: bool, answer: string, awaiting_operator: bool}>
+     */
+    private function approvals(string $dir): array
+    {
+        $events = $this->readJsonl($dir.'/events.jsonl');
+        $reasons = [];
+        $requests = [];
+        $answers = [];
+        foreach ($events as $event) {
+            $d = $event['data'] ?? [];
+            match ($event['type'] ?? '') {
+                'POLICY_DECIDED' => ($d['verdict'] ?? null) === 'ask' ? $reasons[$d['provider'] ?? ''] = $d['reasons'] ?? [] : null,
+                'APPROVAL_REQUESTED' => $requests[] = $d,
+                'APPROVAL_GIVEN' => $answers[$d['request'] ?? ''] = $d,
+                default => null,
+            };
+        }
+
+        return array_map(function ($r) use ($reasons, $answers) {
+            $answer = $answers[$r['request'] ?? ''] ?? [];
+            $text = (string) ($answer['answer'] ?? '');
+
+            return [
+                'provider' => HarnessEvents::provider((string) ($r['provider'] ?? '')),
+                'provider_id' => (string) ($r['provider'] ?? ''),
+                'capability' => (string) ($r['capability'] ?? ''),
+                'reason' => self::approvalReason($reasons[$r['provider'] ?? ''] ?? []),
+                'approved' => (bool) ($answer['approved'] ?? false),
+                'answer' => $text,
+                'awaiting_operator' => ! ($answer['approved'] ?? false)
+                    && (str_contains($text, 'no interactive approver') || str_contains($text, 'answers exhausted')),
+            ];
+        }, $requests);
+    }
+
+    /**
+     * @param  list<string>  $codes  policy reason codes
+     */
+    private static function approvalReason(array $codes): string
+    {
+        $texts = array_values(array_unique(array_filter(array_map(fn ($code) => match ($code) {
+            'run_strict' => 'it is a medium-risk, third-party (MCP) tool, and this installation asks before using those',
+            'risk_medium_requires_egress' => 'it is medium risk and would send data off this machine',
+            'risk_high' => 'it is a high-risk action',
+            'tainted_arguments_t3' => 'its request was built after reading data an attacker could control (the scanned banner)',
+            'tainted_novel_resource' => 'it was proposed after reading attacker-controlled data and touches something new',
+            default => null,
+        }, $codes))));
+
+        return $texts !== [] ? implode('; and ', $texts) : 'the policy engine routed it to a human';
     }
 
     /**

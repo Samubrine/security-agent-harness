@@ -3,8 +3,12 @@
 namespace App\Providers;
 
 use App\Agent\AgentRunner;
+use App\Agent\ApprovalLedger;
+use App\Agent\ClaimChecker;
+use App\Agent\Progress;
 use App\Agent\Harness\HarnessRunner;
 use App\Agent\Harness\RunArchive;
+use App\Agent\Harness\SkillCatalog;
 use App\Agent\LlmClient;
 use App\Agent\SystemPrompt;
 use App\Agent\ToolRegistry;
@@ -25,9 +29,13 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        // One per request: the live progress channel and the operator's approvals for the next run.
+        $this->app->singleton(Progress::class);
+        $this->app->singleton(ApprovalLedger::class);
         $this->app->singleton(LlmClient::class, fn () => LlmClient::fromConfig());
         $this->app->singleton(HarnessRunner::class, fn () => HarnessRunner::fromConfig());
         $this->app->singleton(RunArchive::class, fn () => RunArchive::fromConfig());
+        $this->app->bind(SkillCatalog::class, fn () => SkillCatalog::fromConfig());
         $this->app->singleton(NvdClient::class, fn () => NvdClient::fromConfig());
 
         // The agent's toolbox. Adding a capability = one AgentTool class + one line here.
@@ -46,6 +54,8 @@ class AppServiceProvider extends ServiceProvider
             maxSteps: (int) config('agent.max_steps'),
             historyMessages: (int) config('agent.history_messages'),
             toolMode: (string) config('agent.llm.tool_mode'),
+            progress: $app->make(Progress::class),
+            claims: $app->make(ClaimChecker::class),
         ));
     }
 

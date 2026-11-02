@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 
 class ToolExecutionLog extends Model
@@ -59,5 +60,15 @@ class ToolExecutionLog extends Model
     public function loggable(): MorphTo
     {
         return $this->morphTo();
+    }
+
+    /**
+     * The evidence artifact(s) this call produced.
+     *
+     * @return HasMany<EvidenceArtifact>
+     */
+    public function evidenceArtifacts(): HasMany
+    {
+        return $this->hasMany(EvidenceArtifact::class);
     }
 }
