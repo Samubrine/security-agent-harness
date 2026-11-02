@@ -11,8 +11,10 @@
 |
 */
 
+// Same location scripts/gen_scope_keypair.py uses: $XDG_CONFIG_HOME or ~/.config.
 $home = getenv('USERPROFILE') ?: (getenv('HOME') ?: '');
-$scopeDir = $home.DIRECTORY_SEPARATOR.'.config'.DIRECTORY_SEPARATOR.'security-agent-harness';
+$configHome = getenv('XDG_CONFIG_HOME') ?: $home.DIRECTORY_SEPARATOR.'.config';
+$scopeDir = $configHome.DIRECTORY_SEPARATOR.'security-agent-harness';
 
 $defaultPython = 'python';
 foreach (['.venv/Scripts/python.exe', '.venv/bin/python'] as $candidate) {
