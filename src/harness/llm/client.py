@@ -12,6 +12,8 @@ Two things are enforced here rather than documented as policy:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
+import re
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
@@ -23,6 +25,24 @@ from harness.util import estimate_tokens
 #: Hosts that are unambiguously this machine. A bind-all address is deliberately absent:
 #: 0.0.0.0 means "every interface", which is the opposite of staying local.
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]", "0:0:0:0:0:0:0:1"})
+
+#: Environment variable holding a bearer token for an OpenAI-compatible gateway. Read from the
+#: environment rather than a CLI flag so the secret never appears in a process listing or a run
+#: manifest.
+API_KEY_ENV = "HARNESS_MODEL_API_KEY"
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", flags=re.DOTALL | re.IGNORECASE)
+
+
+def strip_reasoning(text: str) -> str:
+    """Remove ``<think>...</think>`` blocks that reasoning models (Qwen3, DeepSeek-R1) emit before
+    their answer. The reasoning can contain braces, which would otherwise confuse the JSON
+    extraction in ``parse_agent_turn``. An unclosed block means the answer never arrived."""
+    stripped = _THINK_BLOCK.sub("", text)
+    lowered = stripped.lower()
+    if "<think>" in lowered:
+        stripped = stripped[: lowered.index("<think>")]
+    return stripped.strip()
 
 
 @dataclass
@@ -84,8 +104,10 @@ class OpenAICompatClient:
         timeout_s: float = 120.0,
         allow_remote: bool = False,
         tokenizer_id: str = "heuristic-4chars",
+        api_key: str | None = None,
     ) -> None:
         enforce_local(base_url, allow_remote=allow_remote, backend="openai")
+        self._api_key = api_key if api_key is not None else os.environ.get(API_KEY_ENV) or None
         self.base_url = base_url.rstrip("/")
         self._allow_remote = allow_remote
         self.metadata = ModelMetadata(
@@ -115,15 +137,18 @@ class OpenAICompatClient:
         }
         if self.seed is not None:
             payload["seed"] = self.seed
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
-            resp = httpx.post(f"{self.base_url}/chat/completions", json=payload, timeout=self.timeout_s)
+            resp = httpx.post(
+                f"{self.base_url}/chat/completions", json=payload, headers=headers, timeout=self.timeout_s
+            )
             resp.raise_for_status()
             body = resp.json()
         except Exception as exc:  # noqa: BLE001 - transport failures are all the same to the caller
             raise ModelClientError(f"local model request failed: {exc}") from exc
 
         try:
-            text = body["choices"][0]["message"]["content"]
+            text = strip_reasoning(body["choices"][0]["message"]["content"] or "")
         except (KeyError, IndexError, TypeError) as exc:
             raise ModelClientError(f"unexpected model response shape: {body!r}") from exc
         usage = body.get("usage") or {}
@@ -191,7 +216,7 @@ class OllamaClient:
             raise ModelClientError(f"local ollama request failed: {exc}") from exc
 
         try:
-            text = body["message"]["content"]
+            text = strip_reasoning(body["message"]["content"] or "")
         except (KeyError, TypeError) as exc:
             raise ModelClientError(f"unexpected ollama response shape: {body!r}") from exc
         in_toks = int(body.get("prompt_eval_count") or _heuristic_usage(system, user, text)[0])
