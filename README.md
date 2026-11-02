@@ -25,7 +25,7 @@ before starting work on anything in this repository: it names, per task, which c
 first.
 
 ```text
-728 tests collected, 727 passing, 1 skipped on Linux / Python 3.14 (about 11s)
+729 tests collected, 728 passing, 1 skipped on Linux / Python 3.13 (about 16s)
 port_scan / log_analysis / injection_resistance / entry_point: every scenario passes its
 precision, recall, hallucination, evidence-binding and scope-compliance targets
 ```
