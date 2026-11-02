@@ -270,6 +270,27 @@ Aplikasi menyediakan tombol switch langsung pada antarmuka `/chat/{id}` untuk me
 
 ### 🚀 Cara Menjalankan Aplikasi (Laravel + Harness + LLM)
 
+#### Cara cepat (disarankan untuk anggota kelompok)
+
+Prasyarat: **Python 3.12+, PHP 8.3+ (bukan 8.2 bawaan XAMPP), Composer, Node.js**. PHP 8.4 paling mudah dipasang
+lewat <https://php.new>. Lalu, dari folder proyek:
+
+```bash
+python scripts/setup.py          # Windows: python scripts\setup.py
+```
+
+Skrip ini memeriksa semua prasyarat (dan memberi tahu persis apa yang kurang), membuat `.venv`, memasang harness,
+membuat dan menandatangani scope lab, menjalankan `composer install`, membuat `.env`, kunci aplikasi, database +
+akun demo, `npm install`/`npm run build`, dan mengunduh bundel sertifikat CA jika PHP-mu tidak punya
+(error `cURL error 60`), sehingga **tidak perlu mengubah `php.ini`**. Setelah selesai:
+
+1. Isi `LLM_API_KEY` di `.env` (minta key kelompok; contoh Groq gratis ada di `.env.example`).
+2. `php artisan serve`, buka <http://127.0.0.1:8000>, login `test@example.com` / `password`.
+
+`python scripts/setup.py --check` hanya memeriksa tanpa mengubah apa pun. Skrip aman diulang.
+
+#### Cara manual (langkah per langkah)
+
 ```bash
 # 1. Dependensi PHP & JS
 composer install
