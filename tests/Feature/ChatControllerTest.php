@@ -21,7 +21,9 @@ class ChatControllerTest extends TestCase
         $response = $this->actingAs($user)->get(route('chat.index'));
 
         $response->assertStatus(200);
-        $response->assertSee('Agentic AI Chat Sessions');
+        $response->assertSee('Is your lab safe?');
+        $response->assertSee('Run a full check-up');
+        $response->assertSee('How this agent works');
     }
 
     public function test_authenticated_user_can_view_chat_show_optimized_and_lazy_modes(): void
@@ -112,5 +114,31 @@ class ChatControllerTest extends TestCase
         $this->actingAs($intruder)->post(route('chat.message', $session->id), ['content' => 'hello'])->assertNotFound();
         $this->actingAs($intruder)->get(route('chat.index'))->assertDontSee('Owner only investigation');
         $this->assertDatabaseMissing('chat_messages', ['content' => 'hello']);
+    }
+
+    public function test_asking_on_the_home_page_starts_a_conversation_and_answers_it(): void
+    {
+        $user = User::factory()->create();
+        Http::fake(['llm.test/*' => Http::response($this->llmReply("Mostly fine.\n[[next: Scan lab-web-02]]"))]);
+
+        $response = $this->actingAs($user)->post(route('chat.ask'), ['content' => 'Is lab-web-01 safe?']);
+
+        $session = ChatSession::where('user_id', $user->id)->firstOrFail();
+        $response->assertRedirect(route('chat.show', $session->id).'#latest');
+        $this->assertSame('Is lab-web-01 safe?', $session->title);
+        $this->assertSame(['system', 'user', 'assistant'], $session->chatMessages()->orderBy('sequence_number')->pluck('role')->all());
+        $this->actingAs($user)->get(route('chat.show', $session->id))->assertSee('Scan lab-web-02')->assertSee('Mostly fine.');
+    }
+
+    public function test_the_full_checkup_button_gives_the_agent_a_goal_without_a_question(): void
+    {
+        $user = User::factory()->create();
+        Http::fake(['llm.test/*' => Http::response($this->llmReply('Briefing.'))]);
+
+        $this->actingAs($user)->post(route('chat.checkup'))->assertRedirect();
+
+        $session = ChatSession::where('user_id', $user->id)->firstOrFail();
+        $this->assertStringStartsWith('Full lab check-up', $session->title);
+        $this->assertStringContainsString('every machine and log source', $session->chatMessages()->where('role', 'user')->value('content'));
     }
 }

@@ -1,12 +1,12 @@
 @php
     $onWorkspace = request()->routeIs('investigations.index');
     $workspaceViews = [
-        'overview' => 'Overview',
-        'findings' => 'Findings',
-        'evidence' => 'Evidence',
-        'trace' => 'Investigation trace',
-        'activity' => 'Activity log',
-        'report' => 'Report',
+        'overview' => 'Summary',
+        'findings' => 'Problems found',
+        'evidence' => 'Proof',
+        'trace' => 'How it was found',
+        'activity' => 'History',
+        'report' => 'Full report',
     ];
     $user = Auth::user();
     $initials = collect(preg_split('/\s+/', trim(preg_replace('/\(.*\)/', '', $user->name))))->filter()->take(2)->map(fn ($p) => mb_strtoupper(mb_substr($p, 0, 1)))->implode('');
@@ -20,14 +20,15 @@
 <body>
 <aside class="sidebar">
     <a class="brand" href="{{ route('chat.index') }}" aria-label="AEGIS home"><span class="logo">A</span>AEGIS</a>
-    <p class="brand-description">Agentic Security<br>Investigation System</p>
+    <p class="brand-description">A security assistant that<br>investigates for you</p>
 
-    <p class="nav-label">AGENT</p>
+    <div class="side-nav">
+    <p class="nav-label">Agent</p>
     <nav aria-label="Agent">
-        <a class="nav {{ request()->routeIs('chat.*') ? 'active' : '' }}" href="{{ route('chat.index') }}">Conversations</a>
+        <a class="nav {{ request()->routeIs('chat.*') ? 'active' : '' }}" href="{{ route('chat.index') }}">Ask the agent</a>
     </nav>
 
-    <p class="nav-label">WORKSPACE</p>
+    <p class="nav-label">Investigation workspace</p>
     <nav aria-label="Investigation workspace">
         @foreach ($workspaceViews as $key => $label)
             @if ($onWorkspace)
@@ -37,9 +38,10 @@
             @endif
         @endforeach
     </nav>
+    </div>
 
     <div class="sidebar-bottom">
-        <label class="small-label" for="theme">APPEARANCE</label>
+        <label class="small-label" for="theme">Appearance</label>
         <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
         <div class="local-indicator" title="Language model used by the agent"><i></i> {{ config('agent.llm.model') }}</div>
         <div class="profile">
@@ -57,7 +59,7 @@
 <div class="shell">
     <header class="topbar">
         <div>{{ $section ?? 'Workspace' }} <span>/</span> <b id="breadcrumb">{{ $breadcrumb ?? 'Overview' }}</b></div>
-        <span class="environment"><i></i> {{ $environment ?? 'SIGNED LAB SCOPE' }}</span>
+        <span class="environment"><i></i> {{ $environment ?? 'Signed lab scope' }}</span>
     </header>
     <main>
         @isset($header)
@@ -73,7 +75,7 @@
 
         {{ $slot }}
 
-        <footer><span>AEGIS · Agentic Security Investigation System</span><span>Kelompok 6 · PBKK</span></footer>
+        <footer><span>AEGIS, an agentic security investigation system</span><span>Kelompok 6, PBKK</span></footer>
     </main>
 </div>
 {{ $scripts ?? '' }}

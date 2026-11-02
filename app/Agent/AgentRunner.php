@@ -84,8 +84,10 @@ class AgentRunner
 
                 $calls = array_slice($reply->toolCalls, 0, self::MAX_CALLS_PER_STEP);
                 $messages[] = $this->assistantToolMessage($reply, $calls, $textMode);
+                // The sentence the model wrote next to its tool call is its stated reason; keep it.
+                $why = trim($reply->content) !== '' ? Str::limit(trim($reply->content), 400) : null;
                 foreach ($calls as $call) {
-                    $result = $this->executeTool($assistant, $call);
+                    $result = $this->executeTool($assistant, $call, $why);
                     $messages[] = $this->toolResultMessage($call, $result, $textMode);
                 }
             }
@@ -105,8 +107,11 @@ class AgentRunner
             $answer = "⚠️ **The language model could not be reached.**\n\n".$e->getMessage();
         }
 
+        [$answer, $suggestions] = $this->extractSuggestions($answer);
+
         $assistant->update([
             'content' => $answer,
+            'suggestions' => $suggestions ?: null,
             'reasoning' => $reasoning ? implode("\n\n", $reasoning) : null,
             'token_count' => $completionTokens ?: (int) ceil(mb_strlen($answer) / 4),
         ]);
@@ -241,7 +246,7 @@ class AgentRunner
      *
      * @return array<string, mixed>
      */
-    private function executeTool(ChatMessage $assistant, ToolCall $call): array
+    private function executeTool(ChatMessage $assistant, ToolCall $call, ?string $rationale = null): array
     {
         $tool = $this->tools->get($call->name);
         if ($tool === null) {
@@ -266,6 +271,7 @@ class AgentRunner
         ToolExecutionLog::create([
             'chat_message_id' => $assistant->id,
             'tool_name' => $call->name,
+            'rationale' => $rationale,
             'status' => $status,
             'input_parameters' => $call->arguments,
             'output_payload' => $result,
@@ -275,6 +281,28 @@ class AgentRunner
         ]);
 
         return $result;
+    }
+
+    /**
+     * The agent ends an answer with lines like `[[next: Check lab-web-02 as well]]`: follow-up
+     * actions it proposes. They are removed from the text and returned as clickable suggestions.
+     *
+     * @return array{0: string, 1: list<string>}
+     */
+    private function extractSuggestions(string $answer): array
+    {
+        preg_match_all('/\[\[\s*next:\s*(.+?)\s*\]\]/is', $answer, $matches);
+        $suggestions = collect($matches[1])
+            ->map(fn (string $s) => Str::limit(trim(preg_replace('/\s+/', ' ', $s)), 140))
+            ->filter()
+            ->unique()
+            ->take(3)
+            ->values()
+            ->all();
+
+        $clean = trim(preg_replace('/\[\[\s*next:.*?\]\]/is', '', $answer) ?? $answer);
+
+        return [$clean !== '' ? $clean : $answer, $suggestions];
     }
 
     private function describeLog(ToolExecutionLog $log): string
