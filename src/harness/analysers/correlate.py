@@ -20,7 +20,7 @@ Three relations are distinguishable, and the middle one is why this is not a sim
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 from harness.models import Correlation, Observation
 from harness.util import canonical_json, new_id
@@ -146,8 +146,3 @@ class Correlator:
             for key, value in (observation.value or {}).items()
             if key not in PROVENANCE_FIELDS
         }
-
-
-def conflicting_keys(correlations: Iterable[Correlation]) -> set[str]:
-    """Correlation keys currently in conflict, for the necessity gate's expansion decision."""
-    return {c.key for c in correlations if c.relation == "conflict"}

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-import pytest
 
 from harness.context.builder import ContextBuilder
 from harness.context.resolver import ResolvedContext

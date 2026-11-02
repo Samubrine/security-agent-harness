@@ -73,10 +73,6 @@ class DurableCandidate:
     run_ids: tuple[str, ...]
 
 
-def is_bullet(line: str) -> bool:
-    return BULLET_RE.match(line) is not None
-
-
 def bullet_body(line: str) -> str | None:
     match = BULLET_RE.match(line)
     return match.group("body") if match else None
