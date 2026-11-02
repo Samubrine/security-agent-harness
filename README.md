@@ -268,6 +268,23 @@ Aplikasi menyediakan tombol switch langsung pada antarmuka `/chat/{id}` untuk me
 
 ---
 
+### 🤖 Bagian yang *agentic*
+
+Ringkasan untuk penilaian (detail dan lokasi kode: [`docs/design/10-agentic-features.md`](docs/design/10-agentic-features.md)):
+
+| Ciri agentic | Di mana |
+|---|---|
+| LLM memilih sendiri tool dan urutannya (scan → cari CVE → jawab) | `app/Agent/AgentRunner.php` |
+| Bertindak dari tujuan saja, tanpa pertanyaan ("Run a full check-up") | `ChatSessionController::checkup` |
+| Rencana & alasan terlihat sebelum tiap aksi | kolom `tool_execution_logs.rationale`, tampil sebagai jalur langkah di chat |
+| Aksi nyata: scan lab, baca log, tanya database NIST | `app/Agent/Tools/*`, harness Python |
+| Memori: riwayat chat + arsip investigasi | `RunArchive`, `list_investigations` |
+| Pemulihan galat: kesalahan tool dikembalikan ke model, fallback planner, batas langkah | `AgentRunner`, `HarnessRunner` |
+| Otonomi dalam pagar: scope bertanda tangan, tolak target lain, tahan prompt injection | `Scope`, `SystemPrompt`, harness |
+| Agen menyarankan langkah berikutnya (tombol) | `AgentRunner::extractSuggestions` |
+
+---
+
 ### 🚀 Cara Menjalankan Aplikasi (Laravel + Harness + LLM)
 
 #### Cara cepat (disarankan untuk anggota kelompok)
