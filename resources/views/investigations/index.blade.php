@@ -2,7 +2,7 @@
     <x-slot name="title">Investigations</x-slot>
     <x-slot name="section">Workspace</x-slot>
     <x-slot name="breadcrumb">Overview</x-slot>
-    <x-slot name="environment">Recorded investigations</x-slot>
+    <x-slot name="environment">RECORDED INVESTIGATIONS</x-slot>
 
     <div id="workspace"
          data-runs-url="{{ route('investigations.runs') }}"
@@ -10,7 +10,7 @@
 
         <div class="page-heading">
             <div>
-                
+                <p class="eyebrow">AEGIS / INVESTIGATION WORKSPACE</p>
                 <h1 id="page-title">Security investigation overview</h1>
                 <p class="subtitle">Evidence-based security investigation dashboard</p>
             </div>
@@ -78,7 +78,7 @@
         <div id="content"></div>
 
         <dialog id="detail">
-            <div class="dialog-top"><span class="eyebrow">Details of this problem</span><button id="close-detail" class="icon-button" aria-label="Close details">×</button></div>
+            <div class="dialog-top"><span class="eyebrow">FINDING DETAILS</span><button id="close-detail" class="icon-button" aria-label="Close details">×</button></div>
             <div id="detail-content"></div>
         </dialog>
     </div>

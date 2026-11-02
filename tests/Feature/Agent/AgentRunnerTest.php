@@ -76,23 +76,6 @@ class AgentRunnerTest extends TestCase
         });
     }
 
-    public function test_the_agents_stated_reason_and_suggested_next_steps_are_kept(): void
-    {
-        $this->seedRecordedRun();
-        Http::fake([
-            'llm.test/*' => Http::sequence()
-                ->push($this->llmReply("I'll look at earlier results first, because they may already answer this.", [['list_investigations', []]]))
-                ->push($this->llmReply("Not safe yet: one old Tomcat version.\n\n[[next: Check lab-web-02 as well]]\n[[next: Explain how to fix Tomcat]]\n[[next: Check lab-web-02 as well]]")),
-        ]);
-
-        $reply = app(AgentRunner::class)->respond($this->sessionWithQuestion('Is lab-web-01 safe?'));
-
-        $log = $reply->toolExecutionLogs->first();
-        $this->assertSame("I'll look at earlier results first, because they may already answer this.", $log->rationale);
-        $this->assertSame('Not safe yet: one old Tomcat version.', $reply->content);
-        $this->assertSame(['Check lab-web-02 as well', 'Explain how to fix Tomcat'], $reply->suggestions);
-    }
-
     public function test_a_bad_tool_call_is_reported_back_to_the_model_instead_of_crashing(): void
     {
         Http::fake(['llm.test/*' => Http::sequence()

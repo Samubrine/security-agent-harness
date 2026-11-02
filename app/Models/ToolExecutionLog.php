@@ -19,7 +19,6 @@ class ToolExecutionLog extends Model
     protected $fillable = [
         'chat_message_id',
         'tool_name',
-        'rationale',
         'status',
         'input_parameters',
         'output_payload',
