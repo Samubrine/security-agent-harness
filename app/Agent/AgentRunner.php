@@ -22,7 +22,13 @@ use Throwable;
 class AgentRunner
 {
     /** Tool output larger than this is truncated before it is shown to the model. */
-    private const MAX_TOOL_RESULT_CHARS = 12000;
+    private const MAX_TOOL_RESULT_CHARS = 6000;
+
+    /** Long strings in tool output are shortened for the model; the full output stays in the log. */
+    private const MAX_TOOL_STRING_CHARS = 500;
+
+    /** Keys that cost many tokens and add nothing the model needs to answer. */
+    private const MODEL_HIDDEN_KEYS = ['references', 'more_evidence', 'explanation', 'cvss_vector'];
 
     private const MAX_CALLS_PER_STEP = 4;
 
@@ -188,7 +194,7 @@ class AgentRunner
      */
     private function toolResultMessage(ToolCall $call, array $result, bool $textMode): array
     {
-        $json = json_encode($result, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
+        $json = json_encode($this->compactForModel($result), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}';
         if (strlen($json) > self::MAX_TOOL_RESULT_CHARS) {
             $json = substr($json, 0, self::MAX_TOOL_RESULT_CHARS).'… [truncated]';
         }
@@ -198,6 +204,35 @@ class AgentRunner
         }
 
         return ['role' => 'tool', 'tool_call_id' => $call->id, 'content' => $json];
+    }
+
+    /**
+     * Free-tier gateways allow only a few thousand tokens per minute, so the model gets a trimmed
+     * copy of each tool result: no reference lists, short strings, at most 3 evidence lines per
+     * finding. The ToolExecutionLog and the workspace keep the full output.
+     *
+     * @param  array<array-key, mixed>  $data
+     * @return array<array-key, mixed>
+     */
+    private function compactForModel(array $data, ?string $key = null): array
+    {
+        $out = [];
+        foreach ($data as $k => $value) {
+            if (is_string($k) && in_array($k, self::MODEL_HIDDEN_KEYS, true)) {
+                continue;
+            }
+            if (is_array($value)) {
+                $value = $this->compactForModel($value, is_string($k) ? $k : $key);
+                if (($k === 'evidence') && array_is_list($value)) {
+                    $value = array_slice($value, 0, 3);
+                }
+            } elseif (is_string($value)) {
+                $value = Str::limit($value, self::MAX_TOOL_STRING_CHARS);
+            }
+            $out[$k] = $value;
+        }
+
+        return $out;
     }
 
     /**
