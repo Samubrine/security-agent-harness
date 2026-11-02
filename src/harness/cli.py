@@ -7,7 +7,6 @@ looks like a decision belongs in the spine, where it can be tested without a ter
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -210,7 +209,7 @@ def scope_sign(
     output: Annotated[Path | None, typer.Option("--out", help="Where to write the signed record.")] = None,
 ) -> None:
     """Attach an Ed25519 signature to a scope record."""
-    from harness.policy.scope import key_protection, load_scope, sign_scope
+    from harness.policy.scope import key_protection, sign_scope
     from harness.util import read_json
 
     from harness.models import ScopeFile

@@ -42,14 +42,13 @@ from harness.models import (
     ProvenanceAudit,
     ProvenanceIssue,
 )
-from harness.util import read_json, read_jsonl
+from harness.util import looks_like_memory, read_json, read_jsonl
 
 __all__ = ["audit_provenance", "audit_run_dir"]
 
 #: The live provenance gate (``harness.findings.validate``) refuses a claim that cites a memory
 #: reference. The audit has to use exactly the same test: a narrower rule here would let a
 #: finding through the audit that the live validator would have rejected.
-MEMORY_REFERENCE_PREFIXES = ("mem-", "memory:")
 
 #: ``provenance.jsonl`` relation naming the policy decision that governed a necessity decision.
 GOVERNED_BY = "governed_by"
@@ -77,11 +76,6 @@ def _attr(record: Any, name: str, default: Any) -> Any:
     """
     value = record.get(name, default) if isinstance(record, dict) else getattr(record, name, default)
     return default if value is None else value
-
-
-def _looks_like_memory(reference: Any) -> bool:
-    """Memory is context and can never stand where evidence is required."""
-    return isinstance(reference, str) and reference.startswith(MEMORY_REFERENCE_PREFIXES)
 
 
 def _iter_claim_refs(finding: Any) -> Iterable[tuple[str, str]]:
@@ -246,7 +240,7 @@ def _build_audit(
                 )
             )
         for claim_id, reference in _iter_claim_refs(finding):
-            if reference in observation_ids or _looks_like_memory(reference):
+            if reference in observation_ids or looks_like_memory(reference):
                 continue
             issues.append(
                 _issue(

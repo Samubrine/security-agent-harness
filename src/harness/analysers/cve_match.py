@@ -222,12 +222,6 @@ class VulnerabilitySnapshot:
             return False
         return True
 
-    def entries_for(self, product: str) -> list[dict[str, Any]]:
-        """Every entry naming a product, matched or not. Used by the evaluation harness to score
-        recall against what the snapshot could have found, not only against what it did."""
-        wanted = product.lower()
-        return [entry for entry in self.entries if entry["product"] == wanted]
-
 
 def cpe_from_observation(obs: Observation) -> str | None:
     """The CPE a service observation carries, if any.

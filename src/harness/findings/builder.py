@@ -248,10 +248,3 @@ def _conflict_caveat(correlations: Sequence[Correlation]) -> str | None:
         f"providers disagreed about {keys} in this run; the conflict is preserved in the run state "
         "rather than resolved by preference, so this finding may rest on the losing side of it"
     )
-
-
-def unused_claims(claims: Sequence[Claim], findings: Sequence[Finding]) -> list[Claim]:
-    """Claims that no finding cites. Useful for the evaluation harness and for spotting a rule that
-    fires into the void."""
-    used = {claim.id for finding in findings for claim in finding.claims}
-    return [claim for claim in claims if claim.id not in used]
