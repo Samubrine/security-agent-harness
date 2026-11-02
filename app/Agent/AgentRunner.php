@@ -2,9 +2,11 @@
 
 namespace App\Agent;
 
+use App\Agent\Tools\NeedsContext;
 use App\Agent\Tools\ToolException;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
+use App\Models\EvidenceArtifact;
 use App\Models\ToolExecutionLog;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -39,13 +41,31 @@ class AgentRunner
         private readonly int $maxSteps = 6,
         private readonly int $historyMessages = 12,
         private readonly string $toolMode = 'auto',
+        private readonly ?Progress $progress = null,
+        private readonly ?ClaimChecker $claims = null,
     ) {}
+
+    /** Set when a tool asks the operator for missing context; ends the turn. */
+    private ?NeedsContext $contextRequest = null;
 
     /**
      * Produce the assistant's reply to the latest user message in the session.
+     *
+     * @param  (callable(array<string, mixed>): void)|null  $onEvent  receives live progress events
      */
-    public function respond(ChatSession $session): ChatMessage
+    public function respond(ChatSession $session, ?callable $onEvent = null): ChatMessage
     {
+        $this->progress?->listen($onEvent);
+        try {
+            return $this->turn($session);
+        } finally {
+            $this->progress?->listen(null);
+        }
+    }
+
+    private function turn(ChatSession $session): ChatMessage
+    {
+        $this->contextRequest = null;
         $history = $session->chatMessages()
             ->with('toolExecutionLogs')
             ->orderByDesc('sequence_number')
@@ -71,6 +91,7 @@ class AgentRunner
             $answer = null;
 
             for ($step = 1; $step <= $this->maxSteps; $step++) {
+                $this->emit(['type' => 'thinking', 'label' => $step === 1 ? 'Reading your question and deciding what to do' : 'Reading the results and deciding the next step']);
                 $reply = $this->call($messages, $textMode);
                 $completionTokens += $reply->completionTokens;
                 if ($reply->reasoning) {
@@ -87,11 +108,19 @@ class AgentRunner
                 foreach ($calls as $call) {
                     $result = $this->executeTool($assistant, $call);
                     $messages[] = $this->toolResultMessage($call, $result, $textMode);
+                    if ($this->contextRequest !== null) {
+                        break 2;
+                    }
                 }
             }
 
-            if ($answer === null || $answer === '') {
+            if ($this->contextRequest !== null) {
+                // Missing context is answered by the operator, not guessed by the model.
+                $answer = 'Before I can run the **'.str_replace('_', ' ', $this->contextRequest->skill).'** I need one detail from you: '
+                    .lcfirst($this->contextRequest->fields[0]['label'] ?? 'which target?').' Pick it below.';
+            } elseif ($answer === null || $answer === '') {
                 // Out of steps (or an empty reply): ask for an answer from what is already known.
+                $this->emit(['type' => 'thinking', 'label' => 'Out of steps: writing the answer from what it has']);
                 $messages[] = ['role' => 'user', 'content' => 'You have no tool calls left. Write the final answer now, using only the tool results above, and say what is still unknown.'];
                 $reply = $this->llm->chat($messages);
                 $completionTokens += $reply->completionTokens;
@@ -105,13 +134,66 @@ class AgentRunner
             $answer = "⚠️ **The language model could not be reached.**\n\n".$e->getMessage();
         }
 
+        $this->emit(['type' => 'thinking', 'label' => 'Checking the answer against the evidence']);
         $assistant->update([
             'content' => $answer,
             'reasoning' => $reasoning ? implode("\n\n", $reasoning) : null,
             'token_count' => $completionTokens ?: (int) ceil(mb_strlen($answer) / 4),
+            'pending_action' => $this->pendingAction($assistant),
+            'claim_check' => $this->claims?->check($answer, EvidenceArtifact::where('chat_session_id', $session->id)->get()),
         ]);
+        $this->emit(['type' => 'answer', 'message' => $assistant->id]);
 
         return $assistant->load('toolExecutionLogs.loggable');
+    }
+
+    /**
+     * What the operator must answer before the agent can go on, if anything: missing context, or
+     * an approval the harness asked for in this turn's last investigation.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function pendingAction(ChatMessage $assistant): ?array
+    {
+        if ($this->contextRequest !== null) {
+            return [
+                'type' => 'context',
+                'skill' => $this->contextRequest->skill,
+                'objective' => $this->contextRequest->objective,
+                'fields' => $this->contextRequest->fields,
+            ];
+        }
+
+        $run = $assistant->toolExecutionLogs()
+            ->where('tool_name', 'run_investigation')
+            ->where('status', 'success')
+            ->latest('id')
+            ->first();
+        $needed = $run?->output_payload['approval_needed'] ?? [];
+        if ($needed === []) {
+            return null;
+        }
+
+        return [
+            'type' => 'approval',
+            'skill' => $run->input_parameters['skill'] ?? null,
+            'target' => $run->output_payload['target'] ?? ($run->input_parameters['target'] ?? null),
+            'objective' => $run->input_parameters['objective'] ?? null,
+            'run_id' => $run->output_payload['run_id'] ?? null,
+            'requests' => array_map(fn ($r) => [
+                'provider' => $r['provider'] ?? '',
+                'capability' => $r['capability'] ?? '',
+                'reason' => $r['reason'] ?? '',
+            ], $needed),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $event
+     */
+    private function emit(array $event): void
+    {
+        $this->progress?->emit($event);
     }
 
     /**
@@ -237,7 +319,8 @@ class AgentRunner
 
     /**
      * Run one tool call and record it. Failures are returned to the model as data so it can
-     * correct itself (e.g. pick a valid target) instead of crashing the whole reply.
+     * correct itself (e.g. pick a valid target) instead of crashing the whole reply. A successful
+     * result is also stored as a content-addressed evidence artifact.
      *
      * @return array<string, mixed>
      */
@@ -248,10 +331,15 @@ class AgentRunner
             return ['error' => "Unknown tool `{$call->name}`. Available: ".implode(', ', $this->tools->names()).'.'];
         }
 
+        $this->emit(['type' => 'tool_started', 'tool' => $call->name, 'label' => $this->startedLabel($call)]);
         $started = microtime(true);
         try {
             $result = $tool->execute($call->arguments);
             $status = 'success';
+        } catch (NeedsContext $e) {
+            $this->contextRequest = $e;
+            $result = ['needs_context' => $e->fields, 'error' => $e->getMessage()];
+            $status = 'failed';
         } catch (ToolException $e) {
             $result = ['error' => $e->getMessage()];
             $status = 'failed';
@@ -263,7 +351,7 @@ class AgentRunner
         $elapsed = (int) round((microtime(true) - $started) * 1000);
 
         $owner = $tool->loggable($call->arguments);
-        ToolExecutionLog::create([
+        $log = ToolExecutionLog::create([
             'chat_message_id' => $assistant->id,
             'tool_name' => $call->name,
             'status' => $status,
@@ -274,7 +362,71 @@ class AgentRunner
             'loggable_id' => $owner->getKey(),
         ]);
 
+        if ($status === 'success') {
+            EvidenceArtifact::create([
+                'chat_session_id' => $assistant->chat_session_id,
+                'tool_execution_log_id' => $log->id,
+                'kind' => $call->name,
+                'source' => $this->evidenceSource($call, $result),
+                'sha256' => hash('sha256', EvidenceArtifact::canonicalJson($result)),
+                'content' => $result,
+            ]);
+        }
+
+        $this->emit(['type' => 'tool_finished', 'tool' => $call->name, 'ok' => $status === 'success', 'label' => $this->finishedLabel($call, $result, $status)]);
+
         return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function evidenceSource(ToolCall $call, array $result): string
+    {
+        return match ($call->name) {
+            'run_investigation', 'get_investigation' => 'harness:'.($result['run_id'] ?? 'unknown'),
+            'lookup_cve' => (string) ($result['nvd_url'] ?? 'nvd'),
+            'search_cves' => 'nvd:search:'.($result['keyword'] ?? ''),
+            'list_investigations' => 'harness:archive',
+            default => 'tool:'.$call->name,
+        };
+    }
+
+    private function startedLabel(ToolCall $call): string
+    {
+        $a = $call->arguments;
+
+        return match ($call->name) {
+            'run_investigation' => 'Running the '.str_replace('_', ' ', (string) ($a['skill'] ?? 'investigation')).(isset($a['target']) ? ' on '.$a['target'] : ''),
+            'lookup_cve' => 'Looking up '.($a['cve_id'] ?? 'a CVE').' in the NIST vulnerability database',
+            'search_cves' => 'Searching the NIST database for "'.($a['keyword'] ?? '').'"',
+            'list_investigations' => 'Checking earlier investigations',
+            'get_investigation' => 'Re-reading investigation '.($a['run_id'] ?? ''),
+            default => 'Using '.$call->name,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function finishedLabel(ToolCall $call, array $result, string $status): string
+    {
+        if (isset($result['needs_context'])) {
+            return 'Needs one detail from you first';
+        }
+        if ($status !== 'success') {
+            return 'Did not run: '.Str::limit((string) ($result['error'] ?? 'failed'), 140);
+        }
+
+        return match ($call->name) {
+            'run_investigation' => count($result['findings'] ?? []).' findings'
+                .(($c = collect($result['cross_checks'] ?? [])->where('relation', 'conflict')->count()) ? ", {$c} source conflict(s)" : '')
+                .(($result['approval_needed'] ?? []) !== [] ? ', a step is waiting for your approval' : ''),
+            'lookup_cve' => isset($result['cvss_score']) ? 'CVSS '.$result['cvss_score'].' '.strtolower((string) ($result['severity'] ?? '')).(! empty($result['known_exploited']) ? ', exploited in the wild' : '') : 'no details found',
+            'search_cves' => ($result['count'] ?? 0).' results',
+            'list_investigations' => ($result['count'] ?? 0).' recorded runs',
+            default => 'done',
+        };
     }
 
     private function describeLog(ToolExecutionLog $log): string

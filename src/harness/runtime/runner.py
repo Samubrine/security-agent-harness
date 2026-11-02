@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import base64
 
-from dataclasses import dataclass, field
+from dataclasses import replace, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +70,11 @@ class RunRequest:
     target_alias: str | None = None
     approval_mode: str = "deny"
     approval_answers: tuple[bool, ...] = ()
+    #: Ask a human before MEDIUM-risk calls too (the policy engine's explicit strictness). Used by
+    #: the web app so that a third-party MCP server is never called without the operator's OK.
+    strict: bool = False
+    #: JSON file listing MCP servers to start and register as providers (providers/mcp/config.py).
+    mcp_config: Path | None = None
     dry_run: bool = False
     allow_remote: bool = False
     run_id: str | None = None
@@ -398,126 +403,140 @@ def execute_run(request: RunRequest) -> RunArtifacts:
     _register_parsers(parsers)
 
     loop_state: dict[str, Any] = {}
+    # MCP servers are started only now, after the scope has been verified and the context resolved:
+    # a third-party process is not launched for a run that has no authority to exist.
+    mcp_providers: list[Any] = []
+    if request.mcp_config is not None:
+        from harness.providers.mcp.config import load_mcp_providers
+
+        mcp_providers = load_mcp_providers(Path(request.mcp_config), root=Path(request.root))
+    request = replace(request, extra_providers=tuple(request.extra_providers) + tuple(mcp_providers))
     registry = _build_registry(
         request, snapshot, observations=lambda: list(loop_state.get("observations", [])), run_id=run_id
     )
+    try:
 
-    # Provider-side egress, before the loop can use any of them (audit invariant 12). The gate's
-    # objection was that ProviderSpec.requires_network_egress is declared by the provider and then
-    # trusted, so a remote provider registering itself as local would be treated as a local
-    # source. Assessment therefore keys off the transport the harness chose - a fact the harness
-    # owns - and the declaration is only ever echoed for comparison. Fail closed: a provider that
-    # is not permitted stops the run here rather than being quietly skipped, because a run that
-    # silently lost a capability would report an incomplete investigation as a complete one.
-    egress_assessments = [
-        assess_provider_egress(
-            spec.id,
-            endpoint=spec.endpoint,
-            declared_requires_egress=spec.requires_network_egress,
-            egress_enabled=config.enable_remote_egress,
-            local_subprocess=spec.transport == "local_subprocess",
+        # Provider-side egress, before the loop can use any of them (audit invariant 12). The gate's
+        # objection was that ProviderSpec.requires_network_egress is declared by the provider and then
+        # trusted, so a remote provider registering itself as local would be treated as a local
+        # source. Assessment therefore keys off the transport the harness chose - a fact the harness
+        # owns - and the declaration is only ever echoed for comparison. Fail closed: a provider that
+        # is not permitted stops the run here rather than being quietly skipped, because a run that
+        # silently lost a capability would report an incomplete investigation as a complete one.
+        egress_assessments = [
+            assess_provider_egress(
+                spec.id,
+                endpoint=spec.endpoint,
+                declared_requires_egress=spec.requires_network_egress,
+                egress_enabled=config.enable_remote_egress,
+                local_subprocess=spec.transport == "local_subprocess",
+            )
+            for spec in registry.specs()
+        ]
+        for assessment in egress_assessments:
+            events.append(
+                "EGRESS_ASSESSED",
+                {
+                    "provider": assessment.provider,
+                    "endpoint_class": assessment.endpoint_class,
+                    "permitted": assessment.permitted,
+                    "declared_by_provider": assessment.declared_by_provider,
+                    "declaration_mismatch": assessment.declaration_mismatch,
+                    "reasons": assessment.reasons,
+                },
+            )
+            require_permitted(assessment)
+
+        rules = RuleEngine()
+        correlator = Correlator(run_id, aliases=dict(resolved.scope.aliases))
+        policy = PolicyEngine(resolved.grants, dry_run=config.dry_run, strict=request.strict)
+        gate = NecessityGate(registry, budgets, skill=resolved.skill, budgets_guard=guard)
+        router = Router(registry)
+        approvals = _approval_gate(request.approval_mode, request.approval_answers)
+
+        loop = InvestigationLoop(
+            config=config,
+            context=resolved,
+            model=model,
+            registry=registry,
+            gate=gate,
+            policy=policy,
+            approvals=approvals,
+            store=store,
+            events=events,
+            provenance=provenance,
+            ledger=ledger,
+            budgets=guard,
+            parsers=parsers,
+            replay=replay,
+            rules=rules,
+            snapshot=snapshot,
+            correlator=correlator,
+            builder=ContextBuilder(),
+            taint=taint,
+            router=router,
         )
-        for spec in registry.specs()
-    ]
-    for assessment in egress_assessments:
-        events.append(
-            "EGRESS_ASSESSED",
-            {
-                "provider": assessment.provider,
-                "endpoint_class": assessment.endpoint_class,
-                "permitted": assessment.permitted,
-                "declared_by_provider": assessment.declared_by_provider,
-                "declaration_mismatch": assessment.declaration_mismatch,
-                "reasons": assessment.reasons,
-            },
+        # The matcher reads the loop's live observation set, which is why this indirection exists:
+        # the provider must never be handed model-supplied data about which evidence to read.
+        registry.get("native:cve_matcher").observations = lambda: list(
+            loop.state.observations.values()
+        )  # type: ignore[attr-defined]
+
+        state = loop.run()
+        loop_state["observations"] = list(state.observations.values())
+        summary = loop.summary
+
+        if request.enable_memory_curation:
+            _curate_memory(memory, index, state, events, run_id)
+
+        _persist(run_dir, run_id, config, summary, state, policy)
+        # The run directory carries its own authorisation record. A run whose scope record only existed
+        # on the machine that started it could not be audited later, and the scope is the artifact that
+        # answers "under whose authority did this happen?".
+        from harness.util import atomic_write_json as _write_json
+
+        _write_json(run_dir / "scope.json", resolved.scope.model_dump(mode="json"))
+        # The minted grants, recorded so an execution's `grant` field is resolvable from the run
+        # directory alone. Minting is not re-derivable: grant ids come from `new_id`, so re-minting
+        # from scope.json produces different ids and every reference would look unknown. Recording
+        # them closes the same class of gap as policy-decisions.jsonl - a required field that nothing
+        # could check.
+        _write_json(
+            run_dir / "grants.json",
+            [grant.model_dump(mode="json") for grant in resolved.grants.grants],
         )
-        require_permitted(assessment)
+        # The egress assessment is part of the run's authority record: it is the evidence that each
+        # provider was judged on how the harness reached it rather than on what it claimed.
+        _write_json(
+            run_dir / "egress.json",
+            [
+                {
+                    **assessment.model_dump(mode="json"),
+                    # A derived property, so model_dump does not carry it. It is the single most
+                    # useful field for an auditor: it says a provider's claim about itself disagreed
+                    # with how the harness actually reached it.
+                    "declaration_mismatch": assessment.declaration_mismatch,
+                }
+                for assessment in egress_assessments
+            ],
+        )
 
-    rules = RuleEngine()
-    correlator = Correlator(run_id)
-    policy = PolicyEngine(resolved.grants, dry_run=config.dry_run)
-    gate = NecessityGate(registry, budgets, skill=resolved.skill, budgets_guard=guard)
-    router = Router(registry)
-    approvals = _approval_gate(request.approval_mode, request.approval_answers)
+        from harness.report.build import write_report
 
-    loop = InvestigationLoop(
-        config=config,
-        context=resolved,
-        model=model,
-        registry=registry,
-        gate=gate,
-        policy=policy,
-        approvals=approvals,
-        store=store,
-        events=events,
-        provenance=provenance,
-        ledger=ledger,
-        budgets=guard,
-        parsers=parsers,
-        replay=replay,
-        rules=rules,
-        snapshot=snapshot,
-        correlator=correlator,
-        builder=ContextBuilder(),
-        taint=taint,
-        router=router,
-    )
-    # The matcher reads the loop's live observation set, which is why this indirection exists:
-    # the provider must never be handed model-supplied data about which evidence to read.
-    registry.get("native:cve_matcher").observations = lambda: list(
-        loop.state.observations.values()
-    )  # type: ignore[attr-defined]
+        report_md, report_json = write_report(run_dir=run_dir)
+        return RunArtifacts(
+            run_id=run_id,
+            run_dir=run_dir,
+            report_markdown=report_md,
+            report_json=report_json,
+            summary=summary,
+            stop_reason=state.stop_reason,
+        )
+    finally:
+        if mcp_providers:
+            from harness.providers.mcp.config import close_all
 
-    state = loop.run()
-    loop_state["observations"] = list(state.observations.values())
-    summary = loop.summary
-
-    if request.enable_memory_curation:
-        _curate_memory(memory, index, state, events, run_id)
-
-    _persist(run_dir, run_id, config, summary, state, policy)
-    # The run directory carries its own authorisation record. A run whose scope record only existed
-    # on the machine that started it could not be audited later, and the scope is the artifact that
-    # answers "under whose authority did this happen?".
-    from harness.util import atomic_write_json as _write_json
-
-    _write_json(run_dir / "scope.json", resolved.scope.model_dump(mode="json"))
-    # The minted grants, recorded so an execution's `grant` field is resolvable from the run
-    # directory alone. Minting is not re-derivable: grant ids come from `new_id`, so re-minting
-    # from scope.json produces different ids and every reference would look unknown. Recording
-    # them closes the same class of gap as policy-decisions.jsonl - a required field that nothing
-    # could check.
-    _write_json(
-        run_dir / "grants.json",
-        [grant.model_dump(mode="json") for grant in resolved.grants.grants],
-    )
-    # The egress assessment is part of the run's authority record: it is the evidence that each
-    # provider was judged on how the harness reached it rather than on what it claimed.
-    _write_json(
-        run_dir / "egress.json",
-        [
-            {
-                **assessment.model_dump(mode="json"),
-                # A derived property, so model_dump does not carry it. It is the single most
-                # useful field for an auditor: it says a provider's claim about itself disagreed
-                # with how the harness actually reached it.
-                "declaration_mismatch": assessment.declaration_mismatch,
-            }
-            for assessment in egress_assessments
-        ],
-    )
-
-    from harness.report.build import write_report
-
-    report_md, report_json = write_report(run_dir=run_dir)
-    return RunArtifacts(
-        run_id=run_id,
-        run_dir=run_dir,
-        report_markdown=report_md,
-        report_json=report_json,
-        summary=summary,
-        stop_reason=state.stop_reason,
-    )
+            close_all(mcp_providers)
 
 
 def _curate_memory(memory: MemoryManager, index: LongTermIndex, state: Any, events: EventLog, run_id: str) -> None:

@@ -36,12 +36,13 @@
                             <option value="port_scan">Port scan: services, versions, known CVEs</option>
                             <option value="log_analysis">Log analysis: brute force, suspicious logins, recon</option>
                             <option value="entry_point">Entry point: correlate scan and log evidence</option>
+                            <option value="version_check">Version check: scan vs asset inventory (MCP server)</option>
                         </select>
                     </div>
                     <div x-show="skill !== 'entry_point'">
                         <label class="small-label field-label" for="target">TARGET (SIGNED SCOPE)</label>
                         <select class="field" id="target" name="target" :disabled="skill === 'entry_point'">
-                            <template x-if="skill === 'port_scan'">
+                            <template x-if="skill === 'port_scan' || skill === 'version_check'">
                                 <optgroup label="Network hosts">
                                     @foreach ($scope->networkTargets() as $alias)
                                         <option value="{{ $alias }}" @selected(old('target') === $alias)>{{ $alias }}</option>
@@ -66,6 +67,7 @@
                         <span x-text="busy ? 'Running…' : 'Run investigation'">Run investigation</span>
                     </button>
                 </div>
+                <label class="hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="approve" value="1"> Approve steps that need a human OK (for example calling the asset inventory MCP server). Unticked, those steps are skipped and recorded as gaps.</label>
                 <p class="hint">Runs the harness against the selected target in the signed lab scope. Findings appear below when it finishes (usually under a minute).</p>
             </form>
         </details>

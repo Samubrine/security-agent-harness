@@ -268,6 +268,20 @@ Aplikasi menyediakan tombol switch langsung pada antarmuka `/chat/{id}` untuk me
 
 ---
 
+### 🧩 Fitur agentic tambahan (sesuai rancangan awal)
+
+| Rancangan | Yang terjadi di aplikasi |
+|---|---|
+| Progres langsung | Saat agen bekerja, setiap langkah muncul di bawah kotak pesan: memilih tool, scope diverifikasi, necessity gate, keputusan policy, provider berjalan, cross-check. |
+| Policy "ask" → persetujuan | Langkah berisiko (mis. memanggil server MCP pihak ketiga) dilewati dulu, lalu muncul tombol **Approve and run again / Decline**. |
+| Context resolver | Jika target belum jelas ("Scan the web server."), harness menampilkan form pilihan target dari scope bertanda tangan, model tidak menebak. |
+| Bukti, bukan tebakan LLM | Setiap hasil tool disimpan sebagai *evidence artifact* (SHA-256). Jawaban diperiksa otomatis: CVE id, skor CVSS, run id, klaim "exploited in the wild". |
+| MCP + skill baru | `mcp_servers/asset_inventory.py` (server MCP sungguhan) + skill `version_check`: membandingkan versi hasil scan dengan inventaris aset. Contoh: inventaris bilang Tomcat 9.0.31, scan melihat 9.0.30 → *conflict*. |
+
+Coba di chat: *"Was Tomcat on lab-web-01 really patched? Check against the asset inventory."* lalu klik **Approve**, dan *"Scan the web server."*
+
+---
+
 ### 🚀 Cara Menjalankan Aplikasi (Laravel + Harness + LLM)
 
 #### Cara cepat (disarankan untuk anggota kelompok)

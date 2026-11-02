@@ -1,6 +1,8 @@
 import Alpine from 'alpinejs';
+import agentChat from './agent-chat';
 
 window.Alpine = Alpine;
+Alpine.data('agentChat', agentChat);
 Alpine.start();
 
 // Appearance selector in the sidebar (same storage key as the original dashboard).

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Agent\ApprovalLedger;
 use App\Agent\Harness\HarnessException;
 use App\Agent\Harness\HarnessRunner;
 use App\Agent\Harness\RunArchive;
@@ -49,13 +50,19 @@ class InvestigationController extends Controller
     /**
      * Start an investigation directly, without the agent.
      */
-    public function store(Request $request, RunInvestigationTool $tool): RedirectResponse
+    public function store(Request $request, RunInvestigationTool $tool, HarnessRunner $harness, ApprovalLedger $ledger): RedirectResponse
     {
         $validated = $request->validate([
-            'skill' => 'required|string|in:'.implode(',', HarnessRunner::SKILLS),
+            'skill' => 'required|string|in:'.implode(',', $harness->skills()->names()),
             'target' => 'nullable|string|max:64',
             'objective' => 'nullable|string|max:500',
+            'approve' => 'nullable|boolean',
         ]);
+        if ($request->boolean('approve')) {
+            // Approving up front, for a run started by hand: up to three requests get "yes".
+            $ledger->grant($validated['skill'], $validated['target'] ?? null, [true, true, true]);
+        }
+        unset($validated['approve']);
 
         set_time_limit(2 * (int) config('agent.harness.timeout') + 30);
 
@@ -64,11 +71,13 @@ class InvestigationController extends Controller
         } catch (ToolException $e) {
             return redirect()->route('investigations.index')->withInput()->with('error', $e->getMessage());
         }
+        $waiting = count($result['approval_needed'] ?? []);
 
         $note = $result['planner_note'] ? ' The LLM planner did not finish, so the deterministic planner was used.' : '';
 
         return redirect()
             ->route('investigations.index', ['run' => $result['run_id'], 'view' => 'overview'])
-            ->with('status', 'Investigation '.$result['run_id'].' finished with '.count($result['findings']).' findings.'.$note);
+            ->with('status', 'Investigation '.$result['run_id'].' finished with '.count($result['findings']).' findings.'.$note
+                .($waiting ? " {$waiting} step(s) were skipped because they need approval; tick \"approve\" and run again to include them." : ''));
     }
 }

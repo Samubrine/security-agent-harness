@@ -120,3 +120,27 @@ a.nav{display:flex}
   .page-heading .actions{margin-top:14px}
   .stats{grid-template-columns:1fr 1fr}
 }
+
+/* Live agent progress, approvals, missing context, fact check */
+.live{margin-bottom:12px}
+.live-steps{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:5px;max-height:260px;overflow:auto}
+.live-step{display:flex;gap:9px;align-items:baseline;font-size:12px;color:var(--text)}
+.live-step.sub{padding-left:20px;font-size:11px;color:var(--muted)}
+.live-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;border:2px solid var(--accent);transform:translateY(1px)}
+.live-step.done .live-dot{background:var(--accent)}
+.live-step.failed .live-dot{border-color:var(--critical);background:var(--critical)}
+.live-step.active .live-dot{animation:pulse 1s ease-in-out infinite}
+.live-result{color:var(--muted);font-size:11px}
+.live-result:before{content:"→ "}
+@keyframes pulse{50%{opacity:.25}}
+@media(prefers-reduced-motion:reduce){.live-step.active .live-dot{animation:none}}
+.action-card{margin:6px 18px 18px;border:1px solid var(--accent);border-radius:8px;overflow:hidden}
+.action-body{padding:12px 14px;font-size:12px;line-height:1.7;display:grid;gap:8px}
+.action-body p,.action-body ul{margin:0}
+.action-body ul{padding-left:18px}
+.action-buttons{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.action-buttons form{margin:0}
+.action-resolved{margin:0 18px 16px;font-size:11px;color:var(--muted)}
+.fact-check{margin:0 18px 16px;padding:9px 12px;border-radius:6px;font-size:11px;line-height:1.7;background:var(--hover);border-left:3px solid var(--accent)}
+.fact-check.warn{border-left-color:var(--high)}
+.fact-check ul{margin:4px 0 0;padding-left:18px}
