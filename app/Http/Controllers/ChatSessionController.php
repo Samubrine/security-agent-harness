@@ -10,7 +10,6 @@ use App\Models\SecurityScanner;
 use App\Models\ToolExecutionLog;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
@@ -95,10 +94,8 @@ class ChatSessionController extends Controller
             'agent_mode' => 'required|string|in:autonomous_investigation,guided_secops_copilot,strict_compliance_audit,triage_and_containment',
         ]);
 
-        $userId = Auth::id() ?? 1;
-
         $session = ChatSession::create([
-            'user_id' => $userId,
+            'user_id' => $request->user()->id,
             'title' => $validated['title'],
             'session_uuid' => (string) Str::uuid(),
             'status' => 'active',
