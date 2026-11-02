@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\ChatSessionController;
+use App\Http\Controllers\InvestigationController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
 
@@ -18,6 +19,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/chat', [ChatSessionController::class, 'store'])->name('chat.store');
     Route::get('/chat/{id}', [ChatSessionController::class, 'show'])->name('chat.show');
     Route::post('/chat/{id}/message', [ChatSessionController::class, 'sendMessage'])->name('chat.message');
+
+    // Investigation workspace (the harness dashboard) and its JSON records
+    Route::get('/investigations', [InvestigationController::class, 'index'])->name('investigations.index');
+    Route::post('/investigations', [InvestigationController::class, 'store'])->name('investigations.store');
+    Route::get('/investigations/runs', [InvestigationController::class, 'runs'])->name('investigations.runs');
+    Route::get('/investigations/runs/{run}', [InvestigationController::class, 'show'])
+        ->where('run', 'run-[A-Za-z0-9T-]+')->name('investigations.run');
 
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');

@@ -3,11 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Agent\AgentRunner;
+use App\Agent\Harness\RunArchive;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
-use App\Models\KnowledgeSource;
-use App\Models\LogAnalyzer;
-use App\Models\SecurityScanner;
 use App\Models\ToolExecutionLog;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -18,28 +16,27 @@ use Illuminate\View\View;
 class ChatSessionController extends Controller
 {
     /**
-     * Display a listing of all chat sessions.
+     * The operator's conversations, plus what the agent has done across them.
      */
-    public function index(Request $request): View
+    public function index(Request $request, RunArchive $archive): View
     {
         $chatSessions = $request->user()->chatSessions()
-            ->with(['user'])
             ->withCount(['chatMessages'])
-            ->latest()
-            ->paginate(10);
+            ->latest('updated_at')
+            ->paginate(12);
 
-        $scannersCount = SecurityScanner::count();
-        $knowledgeCount = KnowledgeSource::count();
-        $analyzerCount = LogAnalyzer::count();
-        $totalLogsCount = ToolExecutionLog::count();
+        $ownLogs = ToolExecutionLog::whereHas('chatMessage.chatSession', fn ($q) => $q->whereBelongsTo($request->user()));
+        $toolCalls = (clone $ownLogs)->count();
 
-        return view('chat.index', compact(
-            'chatSessions',
-            'scannersCount',
-            'knowledgeCount',
-            'analyzerCount',
-            'totalLogsCount'
-        ));
+        // Polymorphic breakdown: which kind of agent/knowledge source handled the calls.
+        $byOwner = (clone $ownLogs)
+            ->selectRaw('loggable_type, count(*) as total')
+            ->groupBy('loggable_type')
+            ->pluck('total', 'loggable_type');
+
+        $investigations = count($archive->records());
+
+        return view('chat.index', compact('chatSessions', 'toolCalls', 'byOwner', 'investigations'));
     }
 
     /**
@@ -113,8 +110,7 @@ class ChatSessionController extends Controller
             'sequence_number' => 1,
         ]);
 
-        return redirect()->route('chat.show', $session->id)
-            ->with('status', 'Chat session created successfully!');
+        return redirect()->route('chat.show', $session->id);
     }
 
     /**
@@ -142,13 +138,11 @@ class ChatSessionController extends Controller
         // An investigation plus several LLM turns can take a minute or two.
         set_time_limit((int) config('agent.harness.timeout') + 6 * (int) config('agent.llm.timeout'));
 
-        $reply = $agent->respond($session);
-        $tools = $reply->toolExecutionLogs->count();
+        $agent->respond($session);
+        // Touch the session so the most recently used conversation is listed first.
+        $session->touch();
 
-        return redirect()->route('chat.show', $session->id)
-            ->with('status', $tools > 0
-                ? "Agent answered after {$tools} tool call".($tools === 1 ? '' : 's').'.'
-                : 'Agent answered.');
+        return redirect()->to(route('chat.show', $session->id).'#latest');
     }
 
     /**

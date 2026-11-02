@@ -54,6 +54,8 @@ flowchart LR
 | `list_investigations`, `get_investigation` | Membaca hasil investigasi sebelumnya agar tidak mengulang pekerjaan | `KnowledgeSource` (arsip temuan) |
 | `lookup_cve`, `search_cves` | Informasi publik: skor CVSS, jenis kelemahan (CWE), status *known exploited* CISA, tautan patch | `KnowledgeSource` (NVD) |
 
+Antarmuka web memakai desain dashboard AEGIS (`src/harness/web`): sidebar yang sama, token warna, dan mode terang/gelap. Dashboard harness sendiri kini menjadi halaman **Investigation workspace** di Laravel (`resources/js/workspace.js`, data dari `/investigations/runs`), dan setiap investigasi yang dijalankan agen punya tautan *Open full report in workspace*.
+
 Contoh rantai otomatis untuk *"Apakah lab-web-01 aman?"*: `run_investigation(port_scan)`, lalu `lookup_cve` untuk CVE paling kritis yang ditemukan, lalu jawaban yang menyebut `run_id`, membedakan temuan *confirmed* dan *possible*, dan memberi langkah perbaikan.
 
 Batas keamanan: model hanya memilih **alat** dan **alias target** (`lab-web-01`, `lab-logs`, ...). Laravel memvalidasi argumen, harness memverifikasi scope bertanda tangan, dan output alat diperlakukan sebagai data tak tepercaya (banner di lab sengaja berisi *prompt injection*). Penalaran model (`<think>`) disimpan di `chat_messages.reasoning` dan bisa dibuka di UI. Kode: `app/Agent/`, konfigurasi: `config/agent.php`. Detail desain: [docs/design/09-agentic-chat.md](docs/design/09-agentic-chat.md).
@@ -295,7 +297,8 @@ php artisan serve
 ```
 
 Akses di browser:
-- **Aplikasi Chat Agen AI:** `http://127.0.0.1:8000/chat`
+- **Percakapan dengan agen:** `http://127.0.0.1:8000/chat`
+- **Investigation workspace** (dashboard harness: overview, findings, evidence, trace playback, activity log, report): `http://127.0.0.1:8000/investigations`
 - **Akun Operator Demo:** Email: `test@example.com` | Password: `password`
 
 > Jika jawaban agen berisi *"The language model could not be reached"*, cek `LLM_API_KEY` di `.env` dan pastikan laptop bisa mengakses `senopati.its.ac.id` (mungkin perlu jaringan/VPN ITS).
