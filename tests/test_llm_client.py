@@ -59,3 +59,54 @@ def test_importing_the_llm_package_does_not_import_httpx() -> None:
 def test_replay_backend_requires_a_recorded_file(tmp_path) -> None:
     with pytest.raises(ConfigError):
         build_client(backend="replay", model_id="any")
+
+
+def test_reasoning_blocks_are_stripped_before_the_turn_is_parsed() -> None:
+    from harness.llm.client import strip_reasoning
+
+    assert strip_reasoning('<think>maybe {"a": 1}?</think>\n{"b": 2}') == '{"b": 2}'
+    assert strip_reasoning("<THINK>x</THINK>answer") == "answer"
+    # An unclosed block means the model ran out before answering: nothing usable remains.
+    assert strip_reasoning("<think>still going {") == ""
+    assert strip_reasoning("plain answer") == "plain answer"
+
+
+def test_openai_client_sends_the_gateway_key_from_the_environment(monkeypatch) -> None:
+    import httpx
+
+    seen: dict = {}
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002 - mirrors httpx's keyword
+        seen["url"], seen["headers"] = url, headers
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "<think>hmm</think>{\"ok\": true}"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setenv("HARNESS_MODEL_API_KEY", "sk-test")
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = build_client(
+        backend="openai", model_id="qwen3:14b", endpoint="https://gateway.example/v1", allow_remote=True
+    )
+    response = client.complete(system="s", user="u", step=1)
+    assert seen["url"] == "https://gateway.example/v1/chat/completions"
+    assert seen["headers"] == {"Authorization": "Bearer sk-test"}
+    assert response.text == '{"ok": true}'
+
+
+def test_openai_client_sends_no_auth_header_without_a_key(monkeypatch) -> None:
+    import httpx
+
+    seen: dict = {}
+
+    def fake_post(url, json, headers, timeout):  # noqa: A002
+        seen["headers"] = headers
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "{}"}}]}, request=httpx.Request("POST", url)
+        )
+
+    monkeypatch.delenv("HARNESS_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr(httpx, "post", fake_post)
+    build_client(backend="openai", model_id="m").complete(system="s", user="u", step=1)
+    assert seen["headers"] == {}
