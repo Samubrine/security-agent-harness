@@ -2,10 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Agent\AgentRunner;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
+use App\Models\KnowledgeSource;
 use App\Models\LogAnalyzer;
-use App\Models\MalwareScanner;
 use App\Models\SecurityScanner;
 use App\Models\ToolExecutionLog;
 use Illuminate\Http\RedirectResponse;
@@ -19,22 +20,23 @@ class ChatSessionController extends Controller
     /**
      * Display a listing of all chat sessions.
      */
-    public function index(): View
+    public function index(Request $request): View
     {
-        $chatSessions = ChatSession::with(['user'])
+        $chatSessions = $request->user()->chatSessions()
+            ->with(['user'])
             ->withCount(['chatMessages'])
             ->latest()
             ->paginate(10);
 
         $scannersCount = SecurityScanner::count();
-        $malwareCount = MalwareScanner::count();
+        $knowledgeCount = KnowledgeSource::count();
         $analyzerCount = LogAnalyzer::count();
         $totalLogsCount = ToolExecutionLog::count();
 
         return view('chat.index', compact(
             'chatSessions',
             'scannersCount',
-            'malwareCount',
+            'knowledgeCount',
             'analyzerCount',
             'totalLogsCount'
         ));
@@ -56,7 +58,7 @@ class ChatSessionController extends Controller
 
         if ($mode === 'lazy') {
             // UNOPTIMIZED QUERY: Intentionally demonstrates the N+1 Query Problem
-            $chatSession = ChatSession::findOrFail($id);
+            $chatSession = $this->ownedSession($request, $id);
 
             // Iterating over relations causes N+1 SQL queries to be executed on the fly
             foreach ($chatSession->chatMessages as $message) {
@@ -74,7 +76,7 @@ class ChatSessionController extends Controller
                     $query->orderBy('sequence_number', 'asc')->orderBy('created_at', 'asc');
                 },
                 'chatMessages.toolExecutionLogs.loggable',
-            ])->findOrFail($id);
+            ])->whereBelongsTo($request->user())->findOrFail($id);
         }
 
         $executionTimeMs = round((microtime(true) - $startTime) * 1000, 2);
@@ -107,7 +109,7 @@ class ChatSessionController extends Controller
             'chat_session_id' => $session->id,
             'role' => 'system',
             'content' => "Agentic AI session initialized in [{$validated['agent_mode']}] mode. Ready for security investigations.",
-            'token_count' => 35,
+            'token_count' => 0,
             'sequence_number' => 1,
         ]);
 
@@ -116,75 +118,45 @@ class ChatSessionController extends Controller
     }
 
     /**
-     * Send a message and simulate automated agent tool execution.
+     * Send a message and let the agent answer it.
+     *
+     * The LLM decides which tools to call (harness investigations, findings archive, NVD); each
+     * call is stored as a polymorphic ToolExecutionLog on the assistant's reply.
      */
-    public function sendMessage(Request $request, int $id): RedirectResponse
+    public function sendMessage(Request $request, int $id, AgentRunner $agent): RedirectResponse
     {
         $validated = $request->validate([
-            'content' => 'required|string|min:3',
+            'content' => 'required|string|min:2|max:4000',
         ]);
 
-        $session = ChatSession::findOrFail($id);
-        $nextSeq = $session->chatMessages()->max('sequence_number') + 1;
+        $session = $this->ownedSession($request, $id);
 
-        // 1. Save User Message
         ChatMessage::create([
             'chat_session_id' => $session->id,
             'role' => 'user',
             'content' => $validated['content'],
-            'token_count' => (int) (strlen($validated['content']) / 3),
-            'sequence_number' => $nextSeq++,
+            'token_count' => (int) ceil(mb_strlen($validated['content']) / 4),
+            'sequence_number' => (int) $session->chatMessages()->max('sequence_number') + 1,
         ]);
 
-        // 2. Simulate Agentic Assistant Response & Tool Execution
-        $lowerContent = strtolower($validated['content']);
-        $assistantContent = '';
-        $toolName = '';
-        $agent = null;
-        $inputParams = [];
-        $outputPayload = [];
+        // An investigation plus several LLM turns can take a minute or two.
+        set_time_limit((int) config('agent.harness.timeout') + 6 * (int) config('agent.llm.timeout'));
 
-        if (str_contains($lowerContent, 'port') || str_contains($lowerContent, 'scan') || str_contains($lowerContent, 'network')) {
-            $agent = SecurityScanner::first() ?? SecurityScanner::factory()->create();
-            $assistantContent = "Initiating port sweep and security surface mapping via [{$agent->name}].";
-            $toolName = 'nmap_stealth_recon';
-            $inputParams = ['target' => '192.168.1.0/24', 'ports' => '22,80,443,8080', 'flags' => '-sV -T4'];
-            $outputPayload = ['hosts_discovered' => 2, 'open_services' => ['80/http Apache', '22/ssh OpenSSH'], 'risk' => 'medium'];
-        } elseif (str_contains($lowerContent, 'malware') || str_contains($lowerContent, 'file') || str_contains($lowerContent, 'virus') || str_contains($lowerContent, 'hash')) {
-            $agent = MalwareScanner::first() ?? MalwareScanner::factory()->create();
-            $assistantContent = "Submitting binary sample to [{$agent->name}] for static bytecode and heuristic signature checking.";
-            $toolName = 'yara_clamav_analyzer';
-            $inputParams = ['file_path' => '/var/quarantine/sample.bin', 'heuristic_level' => 'aggressive'];
-            $outputPayload = ['verdict' => 'SUSPICIOUS', 'matches' => ['Trojan.Script.Heuristic'], 'confidence_score' => 0.91];
-        } else {
-            $agent = LogAnalyzer::first() ?? LogAnalyzer::factory()->create();
-            $assistantContent = "Extracting telemetry and parsing log patterns using [{$agent->name}].";
-            $toolName = 'owasp_pattern_correlator';
-            $inputParams = ['source' => 'system_logs', 'ruleset' => 'owasp_crs_v4', 'timeframe' => 'last_1h'];
-            $outputPayload = ['anomalies_detected' => 7, 'injection_attempts' => 2, 'status' => 'quarantined'];
-        }
-
-        $assistantMessage = ChatMessage::create([
-            'chat_session_id' => $session->id,
-            'role' => 'assistant',
-            'content' => $assistantContent.' Tool execution completed.',
-            'token_count' => 120,
-            'sequence_number' => $nextSeq,
-        ]);
-
-        // 3. Create Polymorphic ToolExecutionLog
-        ToolExecutionLog::create([
-            'chat_message_id' => $assistantMessage->id,
-            'tool_name' => $toolName,
-            'status' => 'success',
-            'input_parameters' => $inputParams,
-            'output_payload' => $outputPayload,
-            'execution_time_ms' => rand(180, 890),
-            'loggable_type' => get_class($agent),
-            'loggable_id' => $agent->id,
-        ]);
+        $reply = $agent->respond($session);
+        $tools = $reply->toolExecutionLogs->count();
 
         return redirect()->route('chat.show', $session->id)
-            ->with('status', 'Message sent and agent tool executed successfully!');
+            ->with('status', $tools > 0
+                ? "Agent answered after {$tools} tool call".($tools === 1 ? '' : 's').'.'
+                : 'Agent answered.');
+    }
+
+    /**
+     * Sessions are private to their owner: anyone else gets a 404, not a 403, so ids cannot be
+     * probed.
+     */
+    private function ownedSession(Request $request, int $id): ChatSession
+    {
+        return ChatSession::whereBelongsTo($request->user())->findOrFail($id);
     }
 }

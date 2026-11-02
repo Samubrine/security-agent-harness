@@ -64,14 +64,14 @@
                     </div>
                 </div>
 
-                <!-- Card 3: Malware Scanners -->
+                <!-- Card 3: Knowledge Sources -->
                 <div class="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-sm border border-gray-100 dark:border-gray-700/60 relative overflow-hidden group">
                     <div class="absolute -right-4 -bottom-4 w-24 h-24 bg-rose-500/10 rounded-full blur-xl group-hover:scale-150 transition-transform"></div>
                     <div class="flex items-center justify-between">
                         <div>
-                            <p class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Malware Scanners</p>
-                            <h3 class="text-3xl font-extrabold text-gray-900 dark:text-white mt-1">{{ $malwareCount }}</h3>
-                            <p class="text-xs text-rose-600 dark:text-rose-400 mt-2 font-medium">Polymorphic Agent #2</p>
+                            <p class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Knowledge Sources</p>
+                            <h3 class="text-3xl font-extrabold text-gray-900 dark:text-white mt-1">{{ $knowledgeCount }}</h3>
+                            <p class="text-xs text-rose-600 dark:text-rose-400 mt-2 font-medium">Findings archive + NVD</p>
                         </div>
                         <div class="p-3 bg-rose-50 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 rounded-xl">
                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -255,7 +255,7 @@
                     <label class="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase mb-1">Mode Agen AI</label>
                     <select name="agent_mode" class="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 text-sm">
                         <option value="autonomous_investigation">Autonomous Investigation (Full Stack)</option>
-                        <option value="guided_secops_copilot">Guided SecOps Copilot (Interactive)</option>
+                        <option value="guided_secops_copilot">Guided Copilot (explains terms, good for learning)</option>
                         <option value="strict_compliance_audit">Strict Compliance Audit (OWASP/PCI)</option>
                         <option value="triage_and_containment">Triage & Incident Containment</option>
                     </select>

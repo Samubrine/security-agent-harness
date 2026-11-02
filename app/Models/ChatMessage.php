@@ -20,6 +20,7 @@ class ChatMessage extends Model
         'chat_session_id',
         'role',
         'content',
+        'reasoning',
         'token_count',
         'sequence_number',
     ];
