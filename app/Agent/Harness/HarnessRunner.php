@@ -50,15 +50,23 @@ class HarnessRunner
         $planner = $this->config['planner'] === 'llm' && $this->llm['api_key'] ? 'llm' : 'scripted';
 
         if ($planner === 'llm') {
+            // A model that cannot produce a valid plan must not cost the user the answer. The
+            // harness reports that in two ways: a crash, or a run that ends without completing
+            // (e.g. "budget_exhausted" after three unparseable proposals, with zero findings).
+            // Either way, rerun with the deterministic planner and say so in the result.
             try {
-                return $this->invoke($skill, $objective, $target, 'llm');
+                $run = $this->invoke($skill, $objective, $target, 'llm');
+                if (($run->summary['status'] ?? null) === 'completed') {
+                    return $run;
+                }
+                $why = 'LLM-planned run '.$run->runId.' ended as '.($run->summary['status'] ?? 'unknown')
+                    .(isset($run->summary['stop_reason']) ? ': '.$run->summary['stop_reason'] : '');
             } catch (HarnessException $e) {
-                // A model that cannot produce a valid plan must not cost the user the answer:
-                // rerun with the deterministic planner and say so in the result.
-                $run = $this->invoke($skill, $objective, $target, 'scripted');
-
-                return new HarnessRun($run->runId, $run->runDir, $run->summary, 'scripted', 'LLM planner failed: '.Str::limit($e->getMessage(), 300));
+                $why = 'LLM planner failed: '.$e->getMessage();
             }
+            $run = $this->invoke($skill, $objective, $target, 'scripted');
+
+            return new HarnessRun($run->runId, $run->runDir, $run->summary, 'scripted', Str::limit($why, 300));
         }
 
         return $this->invoke($skill, $objective, $target, 'scripted');
