@@ -15,6 +15,7 @@ use App\Agent\Tools\NvdClient;
 use App\Agent\Tools\RunInvestigationTool;
 use App\Agent\Tools\SearchCvesTool;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -53,6 +54,11 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // PHP on Windows often ships without a CA bundle (cURL error 60). scripts/setup.py downloads
+        // one and sets AGENT_CA_BUNDLE, so teammates never have to edit php.ini.
+        $bundle = config('agent.ca_bundle');
+        if ($bundle && is_file($bundle)) {
+            Http::globalOptions(['verify' => $bundle]);
+        }
     }
 }

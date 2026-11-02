@@ -39,6 +39,9 @@ return [
         'tool_mode' => env('LLM_TOOL_MODE', 'auto'),
     ],
 
+    // Optional CA bundle (PEM) for outgoing HTTPS. Set by scripts/setup.py when PHP has none.
+    'ca_bundle' => env('AGENT_CA_BUNDLE'),
+
     // Hard stop for the agent loop: at most this many LLM turns per user message.
     'max_steps' => (int) env('AGENT_MAX_STEPS', 6),
 
