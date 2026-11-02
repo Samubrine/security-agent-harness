@@ -17,8 +17,6 @@ Route::get('/dashboard', function () {
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/chat', [ChatSessionController::class, 'index'])->name('chat.index');
     Route::post('/chat', [ChatSessionController::class, 'store'])->name('chat.store');
-    Route::post('/chat/ask', [ChatSessionController::class, 'ask'])->name('chat.ask');
-    Route::post('/chat/checkup', [ChatSessionController::class, 'checkup'])->name('chat.checkup');
     Route::get('/chat/{id}', [ChatSessionController::class, 'show'])->name('chat.show');
     Route::post('/chat/{id}/message', [ChatSessionController::class, 'sendMessage'])->name('chat.message');
 

@@ -145,9 +145,9 @@ function syncUrl() {
 function render() {
   if (!data) return;
   syncUrl();
-  const titles = {overview:'Summary of this investigation',findings:'Problems found',evidence:'Proof behind the findings',trace:'How the agent found them',activity:'History',report:'Full report'};
+  const titles = {overview:'Security investigation overview',findings:'Investigation findings',evidence:'Evidence records',trace:'Investigation trace',activity:'Activity log',report:'Investigation report'};
   $('#page-title').textContent = titles[view];
-  $('#breadcrumb').textContent = titles[view];
+  $('#breadcrumb').textContent = view === 'activity' ? 'Activity log' : view[0].toUpperCase()+view.slice(1);
   document.querySelectorAll('.nav').forEach(button => button.classList.toggle('active',button.dataset.view===view));
   const counts = Object.fromEntries(levels.map(level => [level,data.findings.filter(f=>f.severity===level).length]));
   if (view === 'overview') { renderOverview(counts); return; }
@@ -157,7 +157,7 @@ function render() {
     const filter = () => {const query = $('#search').value.toLowerCase();$('#finding-results').innerHTML = findingRows(sortedFindings().filter(f=>(!$('#severity').value || f.severity===$('#severity').value) && JSON.stringify(f).toLowerCase().includes(query)));};
     $('#search').addEventListener('input',filter);$('#severity').addEventListener('change',filter);filter();
   } else if (view === 'evidence') {
-    $('#content').innerHTML = panel('Proof behind the findings',`${data.observations.length} observations · expand to inspect the recorded values and provenance.`,data.observations.map(o=>`<details class="record"><summary>${escape(nice(o.kind))} · ${escape(o.provider)}<br><span class="small-label">${escape(o.id)}</span></summary><pre>${escape(JSON.stringify(o,null,2))}</pre></details>`).join('') || empty('No evidence recorded.'));
+    $('#content').innerHTML = panel('Evidence records',`${data.observations.length} observations · expand to inspect the recorded values and provenance.`,data.observations.map(o=>`<details class="record"><summary>${escape(nice(o.kind))} · ${escape(o.provider)}<br><span class="small-label">${escape(o.id)}</span></summary><pre>${escape(JSON.stringify(o,null,2))}</pre></details>`).join('') || empty('No evidence recorded.'));
   } else if (view === 'activity') {
     $('#content').innerHTML = panel('Activity log',`${data.events.length} recorded events · newest first.`,activities([...data.events].reverse()));
   } else {
@@ -178,7 +178,7 @@ function renderOverview(counts) {
   const confirmed = data.findings.filter(f => f.status === 'confirmed').length;
   const possible = data.findings.filter(f => f.status === 'possible').length;
   const other = data.findings.length-confirmed-possible;
-  const stats = [['Problems found',data.findings.length,`${counts.critical} critical · ${counts.high} high`],['Confirmed / likely',`${confirmed} / ${possible}`,other ? `${other} with other statuses` : 'How sure the agent is'],['Pieces of evidence',data.observations.length,'Things the checks observed'],['AI model calls',data.run.summary?.provider_calls ?? '—',`${data.gaps.length} things it could not check`]];
+  const stats = [['Total findings',data.findings.length,`${counts.critical} critical · ${counts.high} high`],['Confirmed / possible',`${confirmed} / ${possible}`,other ? `${other} with other statuses` : 'Finding confidence status'],['Evidence records',data.observations.length,'Recorded observations'],['Provider calls',data.run.summary?.provider_calls ?? '—',`${data.gaps.length} coverage gaps`]];
   const targets = [...new Set(data.events.flatMap(e => e.type === 'CONTEXT_RESOLVED' ? (e.data?.grants || []).map(g=>g.alias).filter(Boolean) : []))];
   const context = [['Target',targets.join(', ') || 'Not recorded'],['Scope',data.run.scope_id || 'Not recorded'],['Skill',nice(data.run.skill)],['Model',data.run.model?.model_id || 'Unknown'],['Authority',data.run.authority || 'Unknown'],['Started',date(data.run.summary?.started_at || data.run.created_at)],['Ended',date(data.run.summary?.ended_at)],['Status',data.run.status || 'Unknown']];
   const chart = `<div class="distribution" role="img" aria-label="Findings by severity: ${escape(levels.map(l=>`${l} ${counts[l]}`).join(', '))}">${levels.map(l=>`<div class="chart-row ${l}"><span>${l}</span><meter min="0" max="${Math.max(1,...Object.values(counts))}" value="${counts[l]}" aria-label="${l}: ${counts[l]} findings"></meter><b>${counts[l]}</b></div>`).join('')}</div>`;

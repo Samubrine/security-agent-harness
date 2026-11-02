@@ -21,7 +21,6 @@ class ChatMessage extends Model
         'role',
         'content',
         'reasoning',
-        'suggestions',
         'token_count',
         'sequence_number',
     ];
@@ -32,7 +31,6 @@ class ChatMessage extends Model
      * @var array<string, string>
      */
     protected $casts = [
-        'suggestions' => 'array',
         'token_count' => 'integer',
         'sequence_number' => 'integer',
     ];
