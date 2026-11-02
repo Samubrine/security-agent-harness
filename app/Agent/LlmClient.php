@@ -19,6 +19,10 @@ use Illuminate\Support\Str;
  */
 class LlmClient
 {
+    private const RATE_LIMIT_RETRIES = 3;
+
+    private const MAX_RETRY_WAIT_SECONDS = 20.0;
+
     public function __construct(
         private readonly string $baseUrl,
         private readonly ?string $apiKey,
@@ -38,6 +42,17 @@ class LlmClient
             temperature: $config['temperature'],
             timeout: $config['timeout'],
         );
+    }
+
+    /** Seconds to wait before retrying a 429, from Retry-After or the message ("try again in 3.6s"). */
+    private static function retryDelaySeconds(Response $response): float
+    {
+        $wait = (float) $response->header('Retry-After');
+        if ($wait <= 0 && preg_match('/try again in ([\d.]+)\s*(ms|s)/i', (string) $response->body(), $m)) {
+            $wait = strtolower($m[2]) === 'ms' ? (float) $m[1] / 1000 : (float) $m[1];
+        }
+
+        return min(max($wait, 1.0) + 0.5, self::MAX_RETRY_WAIT_SECONDS);
     }
 
     public function model(): string
@@ -64,13 +79,21 @@ class LlmClient
             $payload['tool_choice'] = 'auto';
         }
 
-        try {
-            $response = Http::timeout($this->timeout)
-                ->acceptJson()
-                ->when($this->apiKey, fn ($http) => $http->withToken($this->apiKey))
-                ->post($this->baseUrl.'/chat/completions', $payload);
-        } catch (ConnectionException $e) {
-            throw new LlmException('Could not reach the LLM gateway at '.$this->baseUrl.': '.$e->getMessage(), 0, $e);
+        // Rate-limited (HTTP 429, common on free tiers): wait as long as the gateway asks, then retry.
+        for ($attempt = 0;; $attempt++) {
+            try {
+                $response = Http::timeout($this->timeout)
+                    ->acceptJson()
+                    ->when($this->apiKey, fn ($http) => $http->withToken($this->apiKey))
+                    ->post($this->baseUrl.'/chat/completions', $payload);
+            } catch (ConnectionException $e) {
+                throw new LlmException('Could not reach the LLM gateway at '.$this->baseUrl.': '.$e->getMessage(), 0, $e);
+            }
+
+            if ($response->status() !== 429 || $attempt >= self::RATE_LIMIT_RETRIES) {
+                break;
+            }
+            usleep((int) (self::retryDelaySeconds($response) * 1_000_000));
         }
 
         if ($response->failed()) {

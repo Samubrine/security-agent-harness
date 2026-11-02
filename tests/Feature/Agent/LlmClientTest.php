@@ -56,6 +56,18 @@ class LlmClientTest extends TestCase
         $this->assertSame('Let me check.', $reply->content);
     }
 
+    public function test_a_rate_limited_request_is_retried(): void
+    {
+        Http::fake(['llm.test/*' => Http::sequence()
+            ->push(['error' => ['message' => 'Rate limit reached. Please try again in 0.01s.']], 429, ['Retry-After' => '0'])
+            ->push($this->llmReply('Halo!'))]);
+
+        $reply = app(LlmClient::class)->chat([['role' => 'user', 'content' => 'halo']]);
+
+        $this->assertSame('Halo!', $reply->content);
+        Http::assertSentCount(2);
+    }
+
     public function test_a_rejected_key_gives_an_actionable_error(): void
     {
         Http::fake(['llm.test/*' => Http::response(['error' => ['message' => 'invalid key']], 401)]);
