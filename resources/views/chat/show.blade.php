@@ -138,7 +138,6 @@
             <div class="space-y-4">
                 @foreach ($chatSession->chatMessages as $msg)
                     @if($msg->role === 'system')
-                        <!-- System Message -->
                         <div class="flex justify-center my-4">
                             <div class="px-4 py-2 rounded-xl bg-gray-200 dark:bg-gray-700/60 text-gray-700 dark:text-gray-300 text-xs font-mono flex items-center gap-2 border border-gray-300/50 dark:border-gray-600/50 shadow-sm">
                                 <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -148,109 +147,56 @@
                             </div>
                         </div>
                     @elseif($msg->role === 'user')
-                        <!-- User Message -->
                         <div class="flex justify-end">
                             <div class="max-w-2xl bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-2xl rounded-tr-sm p-4 shadow-md shadow-indigo-600/10">
                                 <div class="flex items-center justify-between text-xs text-indigo-200 mb-1 gap-4">
-                                    <span class="font-bold flex items-center gap-1.5">
-                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
-                                        </svg>
-                                        {{ $chatSession->user->name ?? 'SecOps Operator' }}
-                                    </span>
+                                    <span class="font-bold">{{ $chatSession->user->name ?? 'Operator' }}</span>
                                     <span>{{ $msg->created_at->format('H:i:s') }}</span>
                                 </div>
                                 <p class="text-sm leading-relaxed whitespace-pre-wrap">{{ $msg->content }}</p>
                             </div>
                         </div>
                     @else
-                        <!-- Assistant Message -->
                         <div class="flex justify-start">
                             <div class="max-w-3xl w-full bg-white dark:bg-gray-800 rounded-2xl rounded-tl-sm p-5 shadow-sm border border-gray-100 dark:border-gray-700/60 space-y-4">
-                                <div class="flex items-center justify-between border-b border-gray-100 dark:border-gray-700 pb-2.5">
-                                    <div class="flex items-center gap-2">
-                                        <div class="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-sm shadow-indigo-600/30">
-                                            AI
-                                        </div>
-                                        <span class="font-bold text-sm text-gray-900 dark:text-white">AEGIS Autonomous Harness</span>
-                                        <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-semibold">
-                                            {{ $msg->token_count }} tokens
-                                        </span>
+                                <div class="flex items-center justify-between border-b border-gray-100 dark:border-gray-700 pb-2.5 gap-2">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <div class="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-sm shadow-indigo-600/30">AI</div>
+                                        <span class="font-bold text-sm text-gray-900 dark:text-white">AEGIS Agent</span>
+                                        <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-semibold">{{ $msg->token_count }} tokens</span>
+                                        @if($msg->toolExecutionLogs->isNotEmpty())
+                                            <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 font-semibold">{{ $msg->toolExecutionLogs->count() }} tool calls</span>
+                                        @endif
                                     </div>
                                     <span class="text-xs text-gray-400 font-mono">{{ $msg->created_at->format('H:i:s') }}</span>
                                 </div>
 
-                                <p class="text-sm text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">
-                                    {{ $msg->content }}
-                                </p>
-
-                                <!-- CHALLENGE 1: Polymorphic Tool Execution Logs -->
+                                {{-- What the agent did, in order: its own choices of tools (polymorphic ToolExecutionLogs). --}}
                                 @if($msg->toolExecutionLogs->isNotEmpty())
-                                    <div class="space-y-3 pt-2">
-                                        <div class="flex items-center gap-2">
-                                            <span class="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                                🛠️ Log Pemanggilan Alat (Polymorphic Tool Execution Logs)
-                                            </span>
-                                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300">
-                                                {{ $msg->toolExecutionLogs->count() }} Eksekusi
-                                            </span>
+                                    <div class="space-y-2">
+                                        <div class="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                                            🛠️ Langkah agen (Polymorphic Tool Execution Logs)
                                         </div>
-
-                                        @foreach ($msg->toolExecutionLogs as $toolLog)
-                                            <div x-data="{ showDetails: false }" class="rounded-xl border border-gray-200 dark:border-gray-700/80 bg-gray-50/75 dark:bg-gray-900/50 p-3.5 space-y-2">
-                                                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                                    <div class="flex items-center gap-2">
-                                                        <!-- Polymorphic Agent Pill -->
-                                                        @if($toolLog->loggable_type === 'App\Models\SecurityScanner')
-                                                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                                                                🛡️ SecurityScanner: {{ $toolLog->loggable?->nama ?? 'Scanner Agent' }}
-                                                            </span>
-                                                        @elseif($toolLog->loggable_type === 'App\Models\MalwareScanner')
-                                                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
-                                                                🦠 MalwareScanner: {{ $toolLog->loggable?->nama ?? 'Malware Agent' }}
-                                                            </span>
-                                                        @else
-                                                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                                                                📜 LogAnalyzer: {{ $toolLog->loggable?->nama ?? 'Analyzer Agent' }}
-                                                            </span>
-                                                        @endif
-
-                                                        <!-- Tool Name -->
-                                                        <span class="font-mono text-xs font-semibold text-gray-700 dark:text-gray-300">
-                                                            {{ $toolLog->tool_name }}
-                                                        </span>
-                                                    </div>
-
-                                                    <div class="flex items-center gap-2 text-xs">
-                                                        <span class="font-mono text-gray-500 dark:text-gray-400">⏱️ {{ $toolLog->durasi_ms }} ms</span>
-                                                        <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase {{ $toolLog->status === 'berhasil' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300' }}">
-                                                            {{ $toolLog->status }}
-                                                        </span>
-                                                        <button @click="showDetails = !showDetails" class="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline text-xs ml-1">
-                                                            <span x-text="showDetails ? 'Tutup Payload' : 'Lihat Payload'"></span>
-                                                        </button>
-                                                    </div>
-                                                </div>
-
-                                                <!-- Payload Details Drawer -->
-                                                <div x-show="showDetails" x-cloak class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 text-xs font-mono">
-                                                    <!-- Input Parameters -->
-                                                    <div class="p-2.5 rounded-lg bg-gray-900 text-gray-200 border border-gray-800">
-                                                        <span class="text-gray-400 font-bold block mb-1">Input Parameters (JSON):</span>
-                                                        <pre class="overflow-x-auto text-[11px] text-sky-300">{{ json_encode($toolLog->input, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
-                                                    </div>
-
-                                                    <!-- Output Payload -->
-                                                    <div class="p-2.5 rounded-lg bg-gray-900 text-gray-200 border border-gray-800">
-                                                        <span class="text-gray-400 font-bold block mb-1">Output Payload (JSON):</span>
-                                                        <pre class="overflow-x-auto text-[11px] text-emerald-300">{{ json_encode($toolLog->output, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
-                                                    </div>
-                                                </div>
-                                            </div>
+                                        @foreach ($msg->toolExecutionLogs->sortBy('id')->values() as $index => $toolLog)
+                                            @include('chat.partials.tool-log', ['toolLog' => $toolLog, 'index' => $index])
                                         @endforeach
                                     </div>
                                 @endif
 
+                                @if($msg->reasoning)
+                                    <div x-data="{ open: false }" class="rounded-xl border border-dashed border-gray-300 dark:border-gray-600">
+                                        <button type="button" @click="open = !open" class="w-full px-3 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400">
+                                            🧠 <span x-text="open ? 'Sembunyikan penalaran agen' : 'Lihat penalaran agen (reasoning)'"></span>
+                                        </button>
+                                        <div x-show="open" x-cloak class="px-3 pb-3 agent-md text-xs text-gray-600 dark:text-gray-400">
+                                            {!! \Illuminate\Support\Str::markdown($msg->reasoning, ['html_input' => 'escape', 'allow_unsafe_links' => false]) !!}
+                                        </div>
+                                    </div>
+                                @endif
+
+                                <div class="agent-md">
+                                    {!! \Illuminate\Support\Str::markdown($msg->content, ['html_input' => 'escape', 'allow_unsafe_links' => false]) !!}
+                                </div>
                             </div>
                         </div>
                     @endif
@@ -258,30 +204,39 @@
             </div>
 
             <!-- SEND MESSAGE FORM -->
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700/60 p-4 sticky bottom-4 z-10 backdrop-blur-md bg-white/95 dark:bg-gray-800/95">
-                <form action="{{ route('chat.message', $chatSession->id) }}" method="POST" class="space-y-3">
+            <div x-data="{ busy: false }" class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700/60 p-4 sticky bottom-4 z-10 backdrop-blur-md bg-white/95 dark:bg-gray-800/95">
+                @error('content')
+                    <p class="text-xs text-rose-600 mb-2">{{ $message }}</p>
+                @enderror
+                <form action="{{ route('chat.message', $chatSession->id) }}" method="POST" class="space-y-3" @submit="busy = true">
                     @csrf
-                    <!-- Suggestion Chips -->
-                    <div class="flex flex-wrap items-center gap-2 text-xs">
-                        <span class="text-gray-500 dark:text-gray-400 font-medium">Contoh Prompt Cepat:</span>
-                        <button type="button" onclick="document.getElementById('messageInput').value = 'Scan network 192.168.1.0/24 for exposed vulnerabilities and open ports.'" class="px-2.5 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-indigo-50 hover:text-indigo-600 transition">
-                            🛡️ Scan Network Ports
-                        </button>
-                        <button type="button" onclick="document.getElementById('messageInput').value = 'Analyze malware payload binary in /var/quarantine/sample.bin with YARA signatures.'" class="px-2.5 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-rose-50 hover:text-rose-600 transition">
-                            🦠 Heuristic Malware Scan
-                        </button>
-                        <button type="button" onclick="document.getElementById('messageInput').value = 'Inspect auth.log for SSH brute force attacks and SQL injection patterns.'" class="px-2.5 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-amber-50 hover:text-amber-600 transition">
-                            📜 Correlate Log Anomalies
-                        </button>
+                    <div class="flex flex-wrap items-center gap-2 text-xs" x-show="!busy">
+                        <span class="text-gray-500 dark:text-gray-400 font-medium">Coba tanya:</span>
+                        @foreach ([
+                            '🛡️ Is lab-web-01 safe? Check it and explain the most serious risks.',
+                            '📜 Analyse lab-logs. Did someone break in?',
+                            '🎯 How could an attacker get into the lab? Correlate everything.',
+                            '🗂️ What have we found so far?',
+                            '📚 Explain CVE-2021-41773 in simple terms.',
+                        ] as $chip)
+                            <button type="button" onclick="document.getElementById('messageInput').value = {{ json_encode(mb_substr($chip, 2)) }}; document.getElementById('messageInput').focus()" class="px-2.5 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-indigo-50 hover:text-indigo-600 transition">
+                                {{ \Illuminate\Support\Str::limit($chip, 48) }}
+                            </button>
+                        @endforeach
                     </div>
 
-                    <div class="flex items-center gap-3">
-                        <input id="messageInput" type="text" name="content" required placeholder="Ketik perintah investigasi untuk agen AI..." class="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 text-sm">
-                        <button type="submit" class="inline-flex items-center gap-2 px-5 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm rounded-xl shadow-md shadow-indigo-600/25 transition">
-                            <span>Kirim & Eksekusi Alat</span>
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path>
-                            </svg>
+                    <div x-show="busy" x-cloak class="flex items-center gap-3 text-sm text-indigo-600 dark:text-indigo-400 font-medium">
+                        <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>
+                        Agen sedang bekerja: memilih alat, menjalankan investigasi, membaca hasil… (bisa 30–90 detik)
+                    </div>
+
+                    <div class="flex items-end gap-3">
+                        <textarea id="messageInput" name="content" rows="2" required maxlength="4000" :readonly="busy"
+                            placeholder="Tanya agen, mis. “Apakah lab-web-01 aman?”"
+                            @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); if ($el.value.trim()) { busy = true; $el.form.submit(); } }"
+                            class="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 text-sm resize-y">{{ old('content') }}</textarea>
+                        <button type="submit" :disabled="busy" class="inline-flex items-center gap-2 px-5 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-wait text-white font-semibold text-sm rounded-xl shadow-md shadow-indigo-600/25 transition">
+                            <span x-text="busy ? 'Bekerja…' : 'Kirim'">Kirim</span>
                         </button>
                     </div>
                 </form>
