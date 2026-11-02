@@ -77,16 +77,4 @@ class ChatControllerTest extends TestCase
             'tool_name' => 'nmap_stealth_recon',
         ]);
     }
-
-    public function test_authenticated_user_can_view_pitch_presentation(): void
-    {
-        $user = User::factory()->create();
-
-        $response = $this->actingAs($user)->get(route('pitch.index'));
-
-        $response->assertStatus(200);
-        $response->assertSee('Slide Pitch Presentasi — Kelompok 6');
-        $response->assertSee('Mikail Ibrahim Hakim');
-        $response->assertSee('5025241046');
-    }
 }

@@ -19,11 +19,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/chat/{id}', [ChatSessionController::class, 'show'])->name('chat.show');
     Route::post('/chat/{id}/message', [ChatSessionController::class, 'sendMessage'])->name('chat.message');
 
-    // Pitch Presentation Deck (5 Halaman)
-    Route::get('/pitch', function () {
-        return view('pitch.index');
-    })->name('pitch.index');
-
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');

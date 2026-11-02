@@ -25,12 +25,6 @@
                     </div>
                 </div>
             </div>
-
-            <div class="flex items-center gap-2">
-                <a href="{{ route('pitch.index') }}" class="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow-sm transition">
-                    Slide Pitch Presentasi
-                </a>
-            </div>
         </div>
     </x-slot>
 
@@ -164,7 +158,7 @@
                                         </svg>
                                         {{ $chatSession->user->name ?? 'SecOps Operator' }}
                                     </span>
-                                    <span>#{{ $msg->sequence_number }} • {{ $msg->created_at->format('H:i:s') }}</span>
+                                    <span>{{ $msg->created_at->format('H:i:s') }}</span>
                                 </div>
                                 <p class="text-sm leading-relaxed whitespace-pre-wrap">{{ $msg->content }}</p>
                             </div>
@@ -183,7 +177,7 @@
                                             {{ $msg->token_count }} tokens
                                         </span>
                                     </div>
-                                    <span class="text-xs text-gray-400 font-mono">#{{ $msg->sequence_number }} • {{ $msg->created_at->format('H:i:s') }}</span>
+                                    <span class="text-xs text-gray-400 font-mono">{{ $msg->created_at->format('H:i:s') }}</span>
                                 </div>
 
                                 <p class="text-sm text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">
@@ -209,15 +203,15 @@
                                                         <!-- Polymorphic Agent Pill -->
                                                         @if($toolLog->loggable_type === 'App\Models\SecurityScanner')
                                                             <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                                                                🛡️ SecurityScanner: {{ $toolLog->loggable?->name ?? 'Scanner Agent' }}
+                                                                🛡️ SecurityScanner: {{ $toolLog->loggable?->nama ?? 'Scanner Agent' }}
                                                             </span>
                                                         @elseif($toolLog->loggable_type === 'App\Models\MalwareScanner')
                                                             <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
-                                                                🦠 MalwareScanner: {{ $toolLog->loggable?->name ?? 'Malware Agent' }}
+                                                                🦠 MalwareScanner: {{ $toolLog->loggable?->nama ?? 'Malware Agent' }}
                                                             </span>
                                                         @else
                                                             <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                                                                📜 LogAnalyzer: {{ $toolLog->loggable?->name ?? 'Analyzer Agent' }}
+                                                                📜 LogAnalyzer: {{ $toolLog->loggable?->nama ?? 'Analyzer Agent' }}
                                                             </span>
                                                         @endif
 
@@ -228,8 +222,8 @@
                                                     </div>
 
                                                     <div class="flex items-center gap-2 text-xs">
-                                                        <span class="font-mono text-gray-500 dark:text-gray-400">⏱️ {{ $toolLog->execution_time_ms }} ms</span>
-                                                        <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase {{ $toolLog->status === 'success' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300' }}">
+                                                        <span class="font-mono text-gray-500 dark:text-gray-400">⏱️ {{ $toolLog->durasi_ms }} ms</span>
+                                                        <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase {{ $toolLog->status === 'berhasil' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300' }}">
                                                             {{ $toolLog->status }}
                                                         </span>
                                                         <button @click="showDetails = !showDetails" class="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline text-xs ml-1">
@@ -243,13 +237,13 @@
                                                     <!-- Input Parameters -->
                                                     <div class="p-2.5 rounded-lg bg-gray-900 text-gray-200 border border-gray-800">
                                                         <span class="text-gray-400 font-bold block mb-1">Input Parameters (JSON):</span>
-                                                        <pre class="overflow-x-auto text-[11px] text-sky-300">{{ json_encode($toolLog->input_parameters, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
+                                                        <pre class="overflow-x-auto text-[11px] text-sky-300">{{ json_encode($toolLog->input, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
                                                     </div>
 
                                                     <!-- Output Payload -->
                                                     <div class="p-2.5 rounded-lg bg-gray-900 text-gray-200 border border-gray-800">
                                                         <span class="text-gray-400 font-bold block mb-1">Output Payload (JSON):</span>
-                                                        <pre class="overflow-x-auto text-[11px] text-emerald-300">{{ json_encode($toolLog->output_payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
+                                                        <pre class="overflow-x-auto text-[11px] text-emerald-300">{{ json_encode($toolLog->output, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
                                                     </div>
                                                 </div>
                                             </div>

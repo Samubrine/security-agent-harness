@@ -37,13 +37,13 @@ precision, recall, hallucination, evidence-binding and scope-compliance targets
 Bagian ini mendokumentasikan hasil rancangan dan implementasi basis data relasional di Laravel untuk mendukung fitur kompleks pada **Proyek Kelompok Platform Agentic AI**.
 
 ### 👥 Identitas Kelompok 6
-| No | NRP | Nama Mahasiswa | Kontribusi Utama |
-|---|---|---|---|
-| 1 | **5025241046** | **Mikail Ibrahim Hakim** | Lead Architect, ERD Modeling, Controller & Views |
-| 2 | **5025241094** | **Fayza Lathifah Humam** | ORM Models, Foreign Keys & Cascade Constraints |
-| 3 | **5025241097** | **Adriel Mahira Dharma** | Challenge 1 (Polymorphic Logging Architecture) |
-| 4 | **5025241118** | **Muhammad Adi Anugerah Arrahman** | Challenge 2 (Nested Eager Loading & N+1 Elimination) |
-| 5 | **5025241164** | **Alfianz Risqia Ilahi Loven Kary** | Database Seeders, Model Factories & Benchmark Tests |
+| No | NRP | Nama Mahasiswa |
+|---|---|---|
+| 1 | **5025241046** | **Mikail Ibrahim Hakim** |
+| 2 | **5025241094** | **Fayza Lathifah Humam** |
+| 3 | **5025241097** | **Adriel Mahira Dharma** |
+| 4 | **5025241118** | **Muhammad Adi Anugerah Arrahman** |
+| 5 | **5025241164** | **Alfianz Risqia Ilahi Loven Kary** |
 
 ---
 
@@ -53,13 +53,13 @@ Berikut adalah diagram relasi basis data relasional lengkap yang memodelkan rela
 
 ```mermaid
 erDiagram
-    USERS ||--o{ CHAT_SESSIONS : "1. hasMany (FK: user_id ON DELETE CASCADE)"
-    CHAT_SESSIONS ||--o{ CHAT_MESSAGES : "2. hasMany (FK: chat_session_id ON DELETE CASCADE)"
-    CHAT_MESSAGES ||--o{ TOOL_EXECUTION_LOGS : "3. hasMany (FK: chat_message_id ON DELETE CASCADE)"
-    
-    TOOL_EXECUTION_LOGS }o--|| SECURITY_SCANNERS : "Polymorphic loggable (morphTo)"
-    TOOL_EXECUTION_LOGS }o--|| MALWARE_SCANNERS : "Polymorphic loggable (morphTo)"
-    TOOL_EXECUTION_LOGS }o--|| LOG_ANALYZERS : "Polymorphic loggable (morphTo)"
+    USERS ||--o{ CHAT_SESSIONS : "has_many"
+    CHAT_SESSIONS ||--o{ CHAT_MESSAGES : "has_many"
+    CHAT_MESSAGES ||--o{ TOOL_EXECUTION_LOGS : "has_many"
+
+    TOOL_EXECUTION_LOGS }o--|| SECURITY_SCANNERS : "morphs_to"
+    TOOL_EXECUTION_LOGS }o--|| MALWARE_SCANNERS : "morphs_to"
+    TOOL_EXECUTION_LOGS }o--|| LOG_ANALYZERS : "morphs_to"
 
     USERS {
         bigint id PK
@@ -68,40 +68,44 @@ erDiagram
         timestamp email_verified_at
         string password
         string remember_token
-        timestamps created_at_updated_at
+        timestamp created_at
+        timestamp updated_at
     }
 
     CHAT_SESSIONS {
         bigint id PK
-        bigint user_id FK "References users(id) ON DELETE CASCADE"
+        bigint user_id FK
         string title
         uuid session_uuid UK
-        enum status "active, archived, completed"
+        string status
         string agent_mode
-        timestamps created_at_updated_at
+        timestamp created_at
+        timestamp updated_at
     }
 
     CHAT_MESSAGES {
         bigint id PK
-        bigint chat_session_id FK "References chat_sessions(id) ON DELETE CASCADE"
-        enum role "user, assistant, system"
+        bigint chat_session_id FK
+        string role
         text content
-        unsigned_int token_count
-        unsigned_int sequence_number
-        timestamps created_at_updated_at
+        integer token_count
+        integer sequence_number
+        timestamp created_at
+        timestamp updated_at
     }
 
     TOOL_EXECUTION_LOGS {
         bigint id PK
-        bigint chat_message_id FK "References chat_messages(id) ON DELETE CASCADE"
+        bigint chat_message_id FK
         string tool_name
-        enum status "running, success, failed, timeout"
+        string status
         json input_parameters
         json output_payload
-        unsigned_int execution_time_ms
-        string loggable_type "Polymorphic morphs('loggable')"
-        bigint loggable_id "Polymorphic morphs('loggable')"
-        timestamps created_at_updated_at
+        integer execution_time_ms
+        string loggable_type
+        bigint loggable_id
+        timestamp created_at
+        timestamp updated_at
     }
 
     SECURITY_SCANNERS {
@@ -111,7 +115,8 @@ erDiagram
         string engine
         string target_scope
         string version
-        timestamps created_at_updated_at
+        timestamp created_at
+        timestamp updated_at
     }
 
     MALWARE_SCANNERS {
@@ -121,7 +126,8 @@ erDiagram
         string heuristic_level
         string engine
         string version
-        timestamps created_at_updated_at
+        timestamp created_at
+        timestamp updated_at
     }
 
     LOG_ANALYZERS {
@@ -131,7 +137,8 @@ erDiagram
         string pattern_ruleset
         string severity_threshold
         string version
-        timestamps created_at_updated_at
+        timestamp created_at
+        timestamp updated_at
     }
 ```
 
@@ -242,7 +249,6 @@ php artisan serve
 
 Akses di browser:
 - **Aplikasi Obrolan & Relasi AI:** `http://127.0.0.1:8000/chat`
-- **Slide Pitch Presentasi (5 Halaman):** `http://127.0.0.1:8000/pitch`
 - **Akun Operator Demo:** Email: `test@example.com` | Password: `password`
 
 ---
@@ -477,6 +483,4 @@ database/
   seeders/                DatabaseSeeder for Kelompok 6 members & realistic security investigations
 resources/views/
   chat/                   Chat sessions index & show with live query benchmark analyzer
-  pitch/                  Interactive 5-slide pitch presentation view
-SLIDES_PITCH_KELOMPOK_6.md Markdown slide deck for Pertemuan 10 presentation
 ```
