@@ -25,10 +25,40 @@ before starting work on anything in this repository: it names, per task, which c
 first.
 
 ```text
-728 tests collected, 727 passing, 1 skipped on Linux / Python 3.14 (about 11s)
+729 tests collected, 728 passing, 1 skipped on Linux / Python 3.13 (about 16s)
 port_scan / log_analysis / injection_resistance / entry_point: every scenario passes its
 precision, recall, hallucination, evidence-binding and scope-compliance targets
 ```
+
+---
+
+## 🤖 Chat Agen AI: LLM + Harness dalam satu aplikasi
+
+Aplikasi Laravel adalah antarmuka; **LLM** (`qwen3:14b` lewat gateway LLM ITS, atau endpoint OpenAI-compatible lain via `.env`) adalah otaknya; **harness Python** dan **database CVE publik NVD** adalah alatnya. Model sendiri yang memutuskan alat mana yang dipanggil dan kapan jawabannya sudah cukup. Itulah bagian *agentic*-nya.
+
+```mermaid
+flowchart LR
+    U[Operator] -->|pertanyaan| C[ChatSessionController]
+    C --> A[AgentRunner<br/>loop maks. 6 langkah]
+    A <-->|messages + tools| L[(LLM gateway<br/>qwen3:14b)]
+    A -->|tool call| T{ToolRegistry}
+    T --> R[run_investigation] -->|subprocess| H[Harness Python<br/>scope bertanda tangan, policy, bukti]
+    T --> LI[list_investigations /<br/>get_investigation] --> F[(Arsip temuan<br/>storage/app/harness-runs)]
+    T --> N[lookup_cve /<br/>search_cves] --> V[(NIST NVD API)]
+    A -->|setiap pemanggilan| DB[(tool_execution_logs<br/>polymorphic)]
+```
+
+| Alat | Fungsi | Pemilik polimorfik (`loggable`) |
+|---|---|---|
+| `run_investigation` | Menjalankan investigasi baru (`port_scan`, `log_analysis`, `entry_point`) pada target di scope lab | `SecurityScanner` / `LogAnalyzer` |
+| `list_investigations`, `get_investigation` | Membaca hasil investigasi sebelumnya agar tidak mengulang pekerjaan | `KnowledgeSource` (arsip temuan) |
+| `lookup_cve`, `search_cves` | Informasi publik: skor CVSS, jenis kelemahan (CWE), status *known exploited* CISA, tautan patch | `KnowledgeSource` (NVD) |
+
+Antarmuka web memakai desain dashboard AEGIS (`src/harness/web`): sidebar yang sama, token warna, dan mode terang/gelap. Dashboard harness sendiri kini menjadi halaman **Investigation workspace** di Laravel (`resources/js/workspace.js`, data dari `/investigations/runs`), dan setiap investigasi yang dijalankan agen punya tautan *Open full report in workspace*.
+
+Contoh rantai otomatis untuk *"Apakah lab-web-01 aman?"*: `run_investigation(port_scan)`, lalu `lookup_cve` untuk CVE paling kritis yang ditemukan, lalu jawaban yang menyebut `run_id`, membedakan temuan *confirmed* dan *possible*, dan memberi langkah perbaikan.
+
+Batas keamanan: model hanya memilih **alat** dan **alias target** (`lab-web-01`, `lab-logs`, ...). Laravel memvalidasi argumen, harness memverifikasi scope bertanda tangan, dan output alat diperlakukan sebagai data tak tepercaya (banner di lab sengaja berisi *prompt injection*). Penalaran model (`<think>`) disimpan di `chat_messages.reasoning` dan bisa dibuka di UI. Kode: `app/Agent/`, konfigurasi: `config/agent.php`. Detail desain: [docs/design/09-agentic-chat.md](docs/design/09-agentic-chat.md).
 
 ---
 
@@ -56,10 +86,13 @@ erDiagram
     USERS ||--o{ CHAT_SESSIONS : "has_many"
     CHAT_SESSIONS ||--o{ CHAT_MESSAGES : "has_many"
     CHAT_MESSAGES ||--o{ TOOL_EXECUTION_LOGS : "has_many"
+    CHAT_SESSIONS ||--o{ EVIDENCE_ARTIFACTS : "has_many"
+    TOOL_EXECUTION_LOGS ||--o{ EVIDENCE_ARTIFACTS : "has_many"
 
     TOOL_EXECUTION_LOGS }o--|| SECURITY_SCANNERS : "morphs_to"
     TOOL_EXECUTION_LOGS }o--|| MALWARE_SCANNERS : "morphs_to"
     TOOL_EXECUTION_LOGS }o--|| LOG_ANALYZERS : "morphs_to"
+    TOOL_EXECUTION_LOGS }o--|| KNOWLEDGE_SOURCES : "morphs_to"
 
     USERS {
         bigint id PK
@@ -88,8 +121,23 @@ erDiagram
         bigint chat_session_id FK
         string role
         text content
+        longtext reasoning
+        json pending_action
+        json claim_check
         integer token_count
         integer sequence_number
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    EVIDENCE_ARTIFACTS {
+        bigint id PK
+        bigint chat_session_id FK
+        bigint tool_execution_log_id FK
+        string kind
+        string source
+        char sha256 "indexed"
+        json content
         timestamp created_at
         timestamp updated_at
     }
@@ -140,6 +188,16 @@ erDiagram
         timestamp created_at
         timestamp updated_at
     }
+
+    KNOWLEDGE_SOURCES {
+        bigint id PK
+        string name
+        string source_type
+        string provider
+        string endpoint
+        timestamp created_at
+        timestamp updated_at
+    }
 ```
 
 ---
@@ -158,7 +216,12 @@ erDiagram
    - Sebuah `ChatMessage` (khususnya giliran respons agen AI) dapat memicu satu atau lebih pemanggilan alat otomatis (`ToolExecutionLog`).
    - `ToolExecutionLog` memiliki foreign key `chat_message_id` yang mereferensikan `chat_messages.id` dengan `onDelete('cascade')`.
 
-4. **Integritas Cascade Deletion (`onDelete('cascade')`)**
+4. **EvidenceArtifact (`belongsTo` ChatSession dan ToolExecutionLog)**
+   - Tabel `evidence_artifacts` menyimpan bukti hasil alat (`kind`, `source`, `content`) beserta hash `sha256` untuk verifikasi klaim agen.
+   - Foreign key `chat_session_id` dan `tool_execution_log_id` keduanya `onDelete('cascade')`.
+   - Kolom `chat_messages.pending_action` (JSON) menyimpan aksi yang menunggu persetujuan operator; `chat_messages.claim_check` (JSON) menyimpan hasil pemeriksaan klaim terhadap bukti.
+
+5. **Integritas Cascade Deletion (`onDelete('cascade')`)**
    - Semua foreign key constraints secara ketat menerapkan `->onDelete('cascade')`.
    - Menghapus sebuah `ChatSession` akan secara otomatis dan bersih menghapus seluruh `ChatMessage` serta semua `ToolExecutionLog` terkait di bawahnya tanpa meninggalkan data yatim (*orphan records*).
 
@@ -226,30 +289,75 @@ Aplikasi menyediakan tombol switch langsung pada antarmuka `/chat/{id}` untuk me
 
 ---
 
-### 🚀 Cara Menjalankan Aplikasi Web Laravel
+### 🧩 Fitur agentic tambahan (sesuai rancangan awal)
+
+| Rancangan | Yang terjadi di aplikasi |
+|---|---|
+| Progres langsung | Saat agen bekerja, setiap langkah muncul di bawah kotak pesan: memilih tool, scope diverifikasi, necessity gate, keputusan policy, provider berjalan, cross-check. |
+| Policy "ask" → persetujuan | Langkah berisiko (mis. memanggil server MCP pihak ketiga) dilewati dulu, lalu muncul tombol **Approve and run again / Decline**. |
+| Context resolver | Jika target belum jelas ("Scan the web server."), harness menampilkan form pilihan target dari scope bertanda tangan, model tidak menebak. |
+| Bukti, bukan tebakan LLM | Setiap hasil tool disimpan sebagai *evidence artifact* (SHA-256). Jawaban diperiksa otomatis: CVE id, skor CVSS, run id, klaim "exploited in the wild". |
+| MCP + skill baru | `mcp_servers/asset_inventory.py` (server MCP sungguhan) + skill `version_check`: membandingkan versi hasil scan dengan inventaris aset. Contoh: inventaris bilang Tomcat 9.0.31, scan melihat 9.0.30 → *conflict*. |
+
+Coba di chat: *"Was Tomcat on lab-web-01 really patched? Check against the asset inventory."* lalu klik **Approve**, dan *"Scan the web server."*
+
+---
+
+### 🚀 Cara Menjalankan Aplikasi (Laravel + Harness + LLM)
+
+#### Cara cepat (disarankan untuk anggota kelompok)
+
+Prasyarat: **Python 3.12+, PHP 8.3+ (bukan 8.2 bawaan XAMPP), Composer, Node.js**. PHP 8.4 paling mudah dipasang
+lewat <https://php.new>. Lalu, dari folder proyek:
 
 ```bash
-# 1. Masuk ke direktori proyek dan instal dependensi composer & npm
+python scripts/setup.py          # Windows: python scripts\setup.py
+```
+
+Skrip ini memeriksa semua prasyarat (dan memberi tahu persis apa yang kurang), membuat `.venv`, memasang harness,
+membuat dan menandatangani scope lab, menjalankan `composer install`, membuat `.env`, kunci aplikasi, database +
+akun demo, `npm install`/`npm run build`, dan mengunduh bundel sertifikat CA jika PHP-mu tidak punya
+(error `cURL error 60`), sehingga **tidak perlu mengubah `php.ini`**. Setelah selesai:
+
+1. Isi `LLM_API_KEY` di `.env` (minta key kelompok; contoh Groq gratis ada di `.env.example`).
+2. `php artisan serve`, buka <http://127.0.0.1:8000>, login `test@example.com` / `password`.
+
+`python scripts/setup.py --check` hanya memeriksa tanpa mengubah apa pun. Skrip aman diulang.
+
+#### Cara manual (langkah per langkah)
+
+```bash
+# 1. Dependensi PHP & JS
 composer install
 npm install
 
-# 2. Siapkan file environment dan buat application key
+# 2. Harness Python (dipanggil oleh agen chat sebagai subprocess)
+python -m venv .venv
+.venv\Scripts\activate            # Windows  (Linux/macOS: source .venv/bin/activate)
+python -m pip install -e ".[dev]"
+python -m scripts.gen_scope_keypair --skip-if-exists
+python -m scripts.sign_lab_scope    # membuat scope lab yang ditandatangani
+
+# 3. Environment: isi LLM_API_KEY dengan key gateway LLM ITS kelompok (JANGAN di-commit)
 cp .env.example .env
 php artisan key:generate
 
-# 3. Jalankan migrasi dan seeder data relasional dummy
+# 4. Database: akun + pemilik alat polimorfik
 php artisan migrate:fresh --seed
+#    (opsional) data contoh Pertemuan 9 untuk demo N+1:
+php artisan db:seed --class=Week9DemoSeeder
 
-# 4. Bangun aset frontend
+# 5. Frontend & server
 npm run build
-
-# 5. Jalankan server lokal Laravel
 php artisan serve
 ```
 
 Akses di browser:
-- **Aplikasi Obrolan & Relasi AI:** `http://127.0.0.1:8000/chat`
+- **Percakapan dengan agen:** `http://127.0.0.1:8000/chat`
+- **Investigation workspace** (dashboard harness: overview, findings, evidence, trace playback, activity log, report): `http://127.0.0.1:8000/investigations`
 - **Akun Operator Demo:** Email: `test@example.com` | Password: `password`
+
+> Jika jawaban agen berisi *"The language model could not be reached"*, cek `LLM_API_KEY` di `.env` dan pastikan laptop bisa mengakses `senopati.its.ac.id` (mungkin perlu jaringan/VPN ITS).
 
 ---
 
@@ -260,7 +368,7 @@ Akses di browser:
 php artisan test
 
 # Hasil pengujian:
-# 36 passed, 125 assertions (100% Pass)
+# 53 passed (LLM, NVD, dan harness dipalsukan dengan Http::fake / Process::fake)
 
 # Verifikasi kepatuhan gaya penulisan PSR-12 via Laravel Pint
 php vendor/bin/pint --test
@@ -422,6 +530,7 @@ than failing the run, and the deterministic fixture-backed provider answers the 
 | [06-implementation-roadmap.md](docs/design/06-implementation-roadmap.md) | Vertical slice, milestones, week-by-week plan |
 | [07-evaluation-plan.md](docs/design/07-evaluation-plan.md) | Lab targets, ground truth, metrics, ablations, injections |
 | [08-local-first-memory-and-routing.md](docs/design/08-local-first-memory-and-routing.md) | Local model contract, memory lifecycle, multi-provider necessity gate, v2 token optimizer |
+| [09-agentic-chat.md](docs/design/09-agentic-chat.md) | Laravel chat agent: LLM tool loop over the harness, findings archive and NVD; trust boundaries |
 | [decisions.md](docs/design/decisions.md) | ADR log — numbered decisions with status |
 
 ## Headline decisions

@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AEGIS design specimen</title>
+<!-- Fonts for this standalone page only. The app bundles them with @fontsource (design.md §3.1). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500&family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Tokens: copied verbatim from design.md §10.1 */
+:root {
+  color-scheme: dark;
+  --bg:#080808; --bg-deep:#000; --surface-1:#121212; --surface-2:#1c1c1c; --surface-3:#242424;
+  --line:#161616; --line-strong:#262626; --line-input:#666; --grid-dot:#d9d9d9;
+  --text-strong:#ececec; --text:#a3a3a3; --text-muted:#868686; --text-faint:#5c5c5c; --text-on-mint:#080808;
+  --accent:#27916b; --accent-text:#34b386; --accent-bar:#1f7a59; --mint:#e8f4f0;
+  --accent-wash:#11201d; --accent-glow:rgba(39,145,107,.28); --accent-deep:#02261a;
+  --critical:#d00020; --critical-text:#ff6b6b; --high:#d1872d; --high-text:#e0943a;
+  --medium:#a8962f; --medium-text:#d4c15a; --low:#3d7a64; --low-text:#7fb39f; --info:#4a4a4a;
+  --font-display:"Geist Mono Variable","Geist Mono","JetBrains Mono","IBM Plex Mono",ui-monospace,monospace;
+  --font-sans:"Geist Variable","Geist","Inter","Segoe UI",system-ui,sans-serif;
+  --ease:cubic-bezier(.2,.7,.2,1);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:400 15px/1.6 var(--font-sans)}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--accent-text);outline-offset:3px}
+
+/* type */
+.label{font:500 11px/1.4 var(--font-display);letter-spacing:.14em;text-transform:uppercase}
+.display-xl{font:300 clamp(36px,4.6vw,56px)/1.08 var(--font-display);letter-spacing:-.01em;text-transform:uppercase;color:var(--text-strong);margin:0}
+.display-l{font:300 clamp(28px,3vw,40px)/1.12 var(--font-display);text-transform:uppercase;color:var(--text-strong);margin:0}
+.title{font:400 15px/1.35 var(--font-display);letter-spacing:.02em;text-transform:uppercase;color:var(--text-strong);margin:0}
+.stat{font:400 clamp(28px,2.6vw,36px)/1 var(--font-display);letter-spacing:-.01em;color:var(--text-strong);font-variant-numeric:tabular-nums}
+.stat-s{font:400 18px/1.1 var(--font-display);color:var(--text-strong);font-variant-numeric:tabular-nums}
+.body-l{font-size:17px;line-height:1.6;max-width:56ch;margin:0}
+.body-s{font-size:13px;line-height:1.5}
+.muted{color:var(--text-muted)}
+.code{font:400 13px/1.6 var(--font-display)}
+.eyebrow{color:var(--accent);display:block;margin-bottom:16px}
+
+/* status bar + nav */
+.statusbar{background:var(--accent-bar);color:#fff;text-align:center;padding:6px 16px}
+.statusbar a{text-decoration:underline;text-underline-offset:3px}
+.livedot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#fff;margin:0 6px 1px;animation:pulse 1.2s ease-in-out infinite}
+.nav{height:64px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:32px;padding:0 24px}
+.logo{display:flex;gap:10px;align-items:center;font:600 15px var(--font-sans);color:var(--text-strong)}
+.logo svg{width:20px;height:20px}
+.nav-links{display:flex;gap:24px;font:500 14px var(--font-sans);color:var(--text-muted)}
+.nav-links .on{color:var(--text-strong)}
+.nav .right{margin-left:auto;display:flex;gap:10px}
+
+/* frame */
+.frame{max-width:1280px;margin:0 auto;border-inline:1px solid var(--line);overflow-x:clip}
+.band{border-top:1px solid var(--line);position:relative}
+.band::before,.band::after{content:"";position:absolute;top:-2px;width:3px;height:3px;border-radius:50%;background:var(--grid-dot)}
+.band::before{left:-2px}.band::after{right:-2px}
+.cells{display:grid}
+.cells>*{padding:32px}
+.cells>*+*{border-left:1px solid var(--line)}
+.c2{grid-template-columns:repeat(2,1fr)}.c3{grid-template-columns:repeat(3,1fr)}.c4{grid-template-columns:repeat(4,1fr)}
+
+/* hero */
+.hero{display:grid;grid-template-columns:1.1fr .9fr;min-height:420px;background:radial-gradient(600px 420px at 85% 60%,var(--accent-wash),transparent 70%)}
+.hero .copy{padding:56px 32px}
+.hero .copy .actions{margin-top:28px;display:flex;gap:12px;flex-wrap:wrap}
+.hero .visual{position:relative;overflow:hidden}
+.float{position:absolute;top:28px;left:24px;max-width:240px;background:var(--surface-2);border-radius:12px;padding:16px}
+.float .t{color:var(--text-strong)}
+.dots{position:absolute;inset:0}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 18px;border-radius:999px;border:0;font:500 14px var(--font-sans);cursor:pointer;transition:background 120ms var(--ease)}
+.btn-primary{background:var(--mint);color:var(--text-on-mint);box-shadow:0 0 24px rgba(232,244,240,.10)}
+.btn-primary:hover{background:#fff}
+.btn-secondary{background:var(--surface-2);color:var(--text-strong)}
+.btn-secondary:hover{background:var(--surface-3)}
+.btn-icon{width:36px;padding:0;justify-content:center}
+.ghost{color:var(--accent-text)}
+
+/* stat row */
+.stats>*{text-align:center;padding:36px 16px}
+.stats .body-s{margin-top:8px;color:var(--text-muted)}
+
+/* skill cell */
+.tile{width:40px;height:40px;border-radius:10px;background:var(--surface-1);border:1px solid var(--line-strong);display:grid;place-items:center;color:var(--accent)}
+.tile svg{width:18px;height:18px}
+.cell-title{margin:20px 0 8px}
+.check{list-style:none;padding:0;margin:20px 0;display:grid;gap:10px}
+.check li{display:flex;gap:12px;align-items:center;font-size:13px}
+.check svg{width:18px;height:18px;color:var(--accent);flex-shrink:0}
+.minis{display:flex;gap:8px;margin-top:20px}
+.mini{background:var(--surface-1);border-radius:12px;padding:12px 16px;flex:1}
+
+/* rows + chips */
+.rows{display:grid;gap:6px}
+.row{display:flex;align-items:center;gap:14px;min-height:52px;padding:0 16px;background:var(--surface-1);border-radius:8px;transition:background 120ms var(--ease)}
+.row:hover{background:var(--surface-2)}
+.row .name{color:var(--text-strong);font:500 14px var(--font-sans);flex:1;min-width:0}
+.row .arrow{color:var(--text-muted);transition:transform 200ms var(--ease)}
+.row:hover .arrow{transform:translateX(2px)}
+.sev{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.sev::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+.sev.critical{color:var(--critical-text)}.sev.critical::before{background:var(--critical)}
+.sev.high{color:var(--high-text)}.sev.high::before{background:var(--high)}
+.sev.medium{color:var(--medium-text)}.sev.medium::before{background:var(--medium)}
+.sev.low{color:var(--low-text)}.sev.low::before{background:var(--low)}
+.chip{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:5px 12px;background:var(--surface-2)}
+.chip.live{background:var(--surface-1)}
+.chip.live i{width:6px;height:6px;border-radius:50%;background:var(--critical);animation:pulse 1.2s ease-in-out infinite}
+.chip.warn{color:var(--high-text)}
+.ok{color:var(--accent-text)}
+
+/* route */
+.route{list-style:none;margin:16px 0 0;padding:0;position:relative}
+.route::before{content:"";position:absolute;left:4px;top:8px;bottom:8px;width:1px;background:var(--line-strong)}
+.route li{position:relative;padding:0 0 14px 26px}
+.route li::before{content:"";position:absolute;left:0;top:6px;width:10px;height:10px;border-radius:50%;background:var(--accent);box-sizing:border-box}
+.route li.active::before{background:transparent;border:2px solid var(--accent);animation:pulse 1.2s ease-in-out infinite}
+.route li.wait::before{background:var(--bg);border:2px solid var(--line-input)}
+.route li.ask::before{background:var(--bg);border:2px solid var(--high)}
+.route .head{display:flex;gap:12px;align-items:baseline}
+.route .head .t{flex:1}
+.sub{list-style:none;padding:6px 0 0;margin:0;display:grid;gap:3px}
+.sub li{padding:0 0 0 18px;font-size:13px;color:var(--text-muted)}
+.sub li::before{display:none}
+.sub li span{color:var(--accent);margin-right:6px}
+.sub li.askline span{color:var(--high-text)}
+.bar{height:2px;background:var(--surface-3);border-radius:2px;margin:10px 0}
+.bar i{display:block;height:100%;width:62%;background:var(--accent);border-radius:2px}
+
+/* pending action + fact check */
+.pending{background:var(--surface-1);border:1px solid var(--high);border-radius:12px;padding:20px;margin-top:18px}
+.pending .h{display:flex;justify-content:space-between;color:var(--high-text)}
+.pending ul{margin:10px 0 16px;padding-left:18px;font-size:13px}
+.fact{display:flex;gap:10px;align-items:center;background:var(--surface-1);border-radius:8px;padding:10px 14px;margin-top:14px;font-size:13px}
+.fact svg{width:16px;height:16px;color:var(--accent);flex-shrink:0}
+
+/* composer + field */
+.composer{display:flex;gap:8px;align-items:flex-end;background:var(--surface-1);border:1px solid var(--line-input);border-radius:16px;padding:8px}
+.composer textarea{flex:1;background:transparent;border:0;color:var(--text-strong);font:400 15px/1.5 var(--font-sans);resize:none;padding:8px 10px;min-height:44px}
+.composer textarea::placeholder{color:var(--text-faint)}
+.composer:focus-within{border-color:var(--accent-text);box-shadow:0 0 0 3px rgba(52,179,134,.25)}
+.composer textarea:focus{outline:none}
+.say{margin-left:auto;max-width:640px;background:var(--surface-2);color:var(--text-strong);border-radius:16px 16px 4px 16px;padding:12px 16px;width:fit-content}
+
+/* charts */
+.sevbars{display:grid;gap:12px;margin-top:18px}
+.sevbars div{display:grid;grid-template-columns:90px 1fr 24px;gap:12px;align-items:center}
+.track{height:8px;border-radius:4px;background:var(--surface-1);overflow:hidden}
+.track i{display:block;height:100%;border-radius:4px}
+
+/* shield */
+.shield{position:relative;height:220px;display:grid;place-items:center;background:radial-gradient(closest-side,var(--accent-glow),transparent)}
+.shield svg{width:96px;height:96px}
+
+/* swatches */
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.sw{border-radius:10px;overflow:hidden;background:var(--surface-1)}
+.sw i{display:block;height:56px;border-bottom:1px solid var(--line-strong)}
+.sw div{padding:8px 10px;font-size:12px}
+.sw b{display:block;color:var(--text-strong);font:500 11px var(--font-display);letter-spacing:.06em}
+
+footer{display:flex;justify-content:space-between;padding:16px 32px;font-size:13px;color:var(--text-muted)}
+@keyframes pulse{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:960px){
+  .hero{grid-template-columns:1fr}.hero .visual{min-height:220px}
+  .float{display:none}
+  .c3,.c4{grid-template-columns:repeat(2,1fr)}
+  .c4>*:nth-child(3){border-left:0}
+  .c4>*:nth-child(n+3),.c3>*:nth-child(n+3){border-top:1px solid var(--line)}
+  .c3>*:nth-child(3){border-left:0}
+}
+@media (max-width:640px){
+  .c2,.c3,.c4{grid-template-columns:1fr}
+  .cells>*+*{border-left:0;border-top:1px solid var(--line)}
+  .statusbar .wide{display:none}
+  .stats.c4{grid-template-columns:1fr 1fr}
+  .stats.c4>*:nth-child(2n){border-left:1px solid var(--line)}
+  .stats.c4>*:nth-child(2){border-top:0}
+  .cells>*{padding:20px}
+  .nav-links{display:none}
+  .hero .copy{padding:40px 20px}
+}
+</style>
+</head>
+<body>
+<div class="statusbar label">Signed lab scope · lab-2026-09<span class="wide"> · Model openai/gpt-oss-120b · <span class="livedot" aria-hidden="true"></span>Agent working · <a href="#route">See progress</a></span></div>
+
+<nav class="nav" aria-label="Main">
+  <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/></svg>AEGIS</span>
+  <span class="nav-links"><a class="on" href="#">Agent</a><a href="#">Investigations</a><a href="#">Reports</a></span>
+  <span class="right"><button class="btn btn-secondary btn-icon" aria-label="Switch theme"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 010 16z" fill="currentColor"/></svg></button><button class="btn btn-secondary">FL</button></span>
+</nav>
+
+<main class="frame">
+  <section class="band hero">
+    <div class="copy">
+      <span class="label eyebrow">Signed lab scope</span>
+      <h1 class="display-xl">Is your lab<br>safe?</h1>
+      <p class="body-l" style="margin-top:20px">Ask in your own words. The agent decides what to check, runs the investigation inside the signed scope, and answers from evidence.</p>
+      <div class="actions"><button class="btn btn-secondary">View past runs</button><button class="btn btn-primary">Ask the agent</button></div>
+    </div>
+    <div class="visual" aria-hidden="true">
+      <svg class="dots" viewBox="0 0 520 420" preserveAspectRatio="xMidYMid slice">
+        <defs><pattern id="d" width="14" height="14" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.3" fill="#262626"/></pattern>
+          <radialGradient id="g"><stop offset="0" stop-color="rgba(39,145,107,.32)"/><stop offset="1" stop-color="transparent"/></radialGradient></defs>
+        <rect width="520" height="420" fill="url(#d)"/>
+        <circle cx="300" cy="250" r="190" fill="url(#g)"/>
+        <path d="M190 300 Q260 180 360 210 T430 330" fill="none" stroke="#27916b" stroke-width="1.2"/>
+        <path d="M190 300 Q300 330 430 330" fill="none" stroke="#27916b" stroke-opacity=".5" stroke-width="1"/>
+        <g fill="#27916b"><circle cx="190" cy="300" r="5"/><circle cx="360" cy="210" r="5"/><circle cx="430" cy="330" r="5"/></g>
+        <g font-family="Geist Mono, monospace" font-size="10" fill="#868686" letter-spacing="1.2"><text x="150" y="324">LAB-WEB-01</text><text x="330" y="196">LAB-WEB-02</text><text x="400" y="354">LAB-LOGS</text></g>
+      </svg>
+      <div class="float"><div class="label muted">Last run</div><div class="t code" style="margin:6px 0">run-20261102T233345</div><div class="body-s">5 findings · 1 source conflict</div><a class="body-s" style="display:inline-block;margin-top:10px;color:var(--text-strong)" href="#">Open →</a></div>
+    </div>
+  </section>
+
+  <section class="band cells c4 stats">
+    <div><div class="stat">12</div><div class="body-s">Conversations</div></div>
+    <div><div class="stat">48</div><div class="body-s">Tool calls chosen</div></div>
+    <div><div class="stat">9</div><div class="body-s">Investigations</div></div>
+    <div><div class="stat" style="color:var(--critical-text)">2</div><div class="body-s">Critical findings</div></div>
+  </section>
+
+  <section class="band cells c3">
+    <div>
+      <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg></div>
+      <h3 class="title cell-title">Port scan</h3>
+      <p class="body-s" style="margin:0">Open services and versions on one machine, matched to known CVEs.</p>
+      <div class="minis"><div class="mini"><div class="stat-s">3</div><div class="body-s muted">Open ports</div></div><div class="mini"><div class="stat-s">9.8</div><div class="body-s muted">Worst CVSS</div></div></div>
+    </div>
+    <div>
+      <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 12h10M4 18h13"/></svg></div>
+      <h3 class="title cell-title">Log analysis</h3>
+      <p class="body-s" style="margin:0">Brute force, suspicious logins and reconnaissance in the lab logs.</p>
+      <ul class="check">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>Reads auth.log and nginx access logs</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>Cites the exact log line</li>
+      </ul>
+      <a class="label ghost" href="#">Run →</a>
+    </div>
+    <div>
+      <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 7h10v10H7z"/><path d="M3 12h4M17 12h4M12 3v4M12 17v4"/></svg></div>
+      <h3 class="title cell-title">Version check</h3>
+      <p class="body-s" style="margin:0">Compares the scan with the asset inventory, an MCP server, and shows where they disagree.</p>
+      <ul class="check">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>Two independent sources required</li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>Asks before calling the MCP server</li>
+      </ul>
+      <a class="label ghost" href="#">Run →</a>
+    </div>
+  </section>
+
+  <section class="band cells c2">
+    <div id="route">
+      <span class="label eyebrow">Agent activity</span>
+      <h2 class="display-l" style="font-size:28px">What the agent did</h2>
+      <p class="say" style="margin-top:24px">Was Tomcat on lab-web-01 really patched?</p>
+      <div style="margin-top:20px;display:flex;gap:10px;align-items:center"><span class="chip live label"><i></i>Live</span><span class="body-s muted">step 3 · 14s</span></div>
+      <ol class="route" aria-live="polite">
+        <li><div class="head"><span class="t">Read the question and decided what to do</span><span class="code muted">0.8s</span></div></li>
+        <li class="ask"><div class="head"><span class="t title">Run_investigation</span><span class="code muted">3.1s</span></div>
+          <div class="body-s muted">version check · lab-web-01</div>
+          <div class="bar"><i></i></div>
+          <ul class="sub"><li><span>✓</span>Verified the signed scope</li><li><span>✓</span>Necessity gate: network scan + asset inventory</li><li class="askline"><span>!</span>Policy: needs approval for the asset inventory (MCP)</li><li><span>✓</span>Investigation finished · 5 findings</li></ul></li>
+        <li class="active"><div class="head"><span class="t title">Lookup_cve</span><span class="code muted">…</span></div><div class="body-s muted code">CVE-2020-1938</div></li>
+        <li class="wait"><div class="head"><span class="t muted">Write the answer</span></div></li>
+      </ol>
+      <div class="pending">
+        <div class="h label"><span>⚠ Approval needed</span><span class="muted">policy verdict: ask</span></div>
+        <ul><li><b style="color:var(--text-strong)">The asset inventory (MCP server)</b> · <span class="code">service.enumerate</span>: its request was built after reading attacker-controlled data.</li></ul>
+        <div style="display:flex;gap:12px;flex-wrap:wrap"><button class="btn btn-primary">Approve and run again</button><button class="btn btn-secondary">Decline</button></div>
+      </div>
+      <div class="fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg><span>Fact check · 5 of 5 facts match the evidence (CVE ids, CVSS, run ids)</span></div>
+    </div>
+    <div>
+      <span class="label eyebrow">Findings</span>
+      <div class="rows">
+        <a class="row" href="#"><span class="sev critical label">Critical</span><span class="name">Tomcat 9.0.30 has a known flaw <span class="code muted">CVE-2020-1938</span></span><span class="body-s muted">Possible</span><span class="arrow">→</span></a>
+        <a class="row" href="#"><span class="sev high label">High</span><span class="name">nginx 1.18.0 <span class="code muted">CVE-2021-23017</span></span><span class="body-s muted">Possible</span><span class="arrow">→</span></a>
+        <a class="row" href="#"><span class="sev medium label">Medium</span><span class="name">Instructions planted in a banner</span><span class="body-s ok">Confirmed</span><span class="arrow">→</span></a>
+        <a class="row" href="#"><span class="sev low label">Low</span><span class="name">SSH banner discloses distro version</span><span class="body-s ok">Confirmed</span><span class="arrow">→</span></a>
+      </div>
+      <div class="sevbars">
+        <div><span class="label muted">Critical</span><span class="track"><i style="width:40%;background:var(--critical)"></i></span><span class="stat-s">2</span></div>
+        <div><span class="label muted">High</span><span class="track"><i style="width:40%;background:var(--high)"></i></span><span class="stat-s">2</span></div>
+        <div><span class="label muted">Medium</span><span class="track"><i style="width:20%;background:var(--medium)"></i></span><span class="stat-s">1</span></div>
+        <div><span class="label muted">Low</span><span class="track"><i style="width:0;background:var(--low)"></i></span><span class="stat-s">0</span></div>
+      </div>
+      <div style="margin-top:28px">
+        <svg viewBox="0 0 400 120" width="100%" aria-label="Tool calls per day, rising" role="img">
+          <defs><linearGradient id="a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="rgba(39,145,107,.35)"/><stop offset="1" stop-color="rgba(39,145,107,0)"/></linearGradient></defs>
+          <path d="M0 100 C40 90 70 70 110 75 S180 30 220 40 S300 85 330 60 S380 30 400 35 V120 H0Z" fill="url(#a)"/>
+          <path d="M0 100 C40 90 70 70 110 75 S180 30 220 40 S300 85 330 60 S380 30 400 35" fill="none" stroke="#27916b" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <div class="shield" aria-hidden="true">
+        <svg viewBox="0 0 96 96"><path d="M48 8l32 12v24c0 22-14 36-32 44C30 80 16 66 16 44V20z" fill="rgba(28,28,28,.7)" stroke="rgba(232,244,240,.12)"/><rect x="36" y="44" width="24" height="20" rx="3" fill="#e8f4f0"/><path d="M40 44v-6a8 8 0 0116 0v6" fill="none" stroke="#a3a3a3" stroke-width="3"/></svg>
+      </div>
+    </div>
+  </section>
+
+  <section class="band cells c2">
+    <div>
+      <span class="label eyebrow">Composer</span>
+      <div class="composer"><textarea aria-label="Message" placeholder="Ask a follow-up, e.g. How do I fix the Tomcat problem?"></textarea><button class="btn btn-primary">Send</button></div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn btn-secondary body-s" style="height:32px">Is lab-web-01 safe?</button><button class="btn btn-secondary body-s" style="height:32px">Scan the web server</button></div>
+    </div>
+    <div>
+      <span class="label eyebrow">Colour tokens</span>
+      <div class="swatches">
+        <div class="sw"><i style="background:#080808"></i><div><b>--bg</b>#080808</div></div>
+        <div class="sw"><i style="background:#121212"></i><div><b>--surface-1</b>#121212</div></div>
+        <div class="sw"><i style="background:#1c1c1c"></i><div><b>--surface-2</b>#1c1c1c</div></div>
+        <div class="sw"><i style="background:#27916b"></i><div><b>--accent</b>#27916b</div></div>
+        <div class="sw"><i style="background:#e8f4f0"></i><div><b>--mint</b>#e8f4f0</div></div>
+        <div class="sw"><i style="background:#02261a"></i><div><b>--accent-deep</b>#02261a</div></div>
+      </div>
+    </div>
+  </section>
+  <footer class="band"><span>AEGIS · agentic security investigation</span><span>Kelompok 6 · PBKK</span></footer>
+</main>
+</body>
+</html>

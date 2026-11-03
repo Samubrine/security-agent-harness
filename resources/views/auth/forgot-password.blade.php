@@ -1,12 +1,16 @@
 <x-guest-layout>
-    <div class="mb-4 text-sm text-gray-600 dark:text-gray-400">
+    <x-slot name="title">Reset your password</x-slot>
+    <x-slot name="heading">Reset your password</x-slot>
+    <x-slot name="lead">Enter your email and we will send a reset link.</x-slot>
+
+    <div class="hint" style="margin-bottom:16px">
         {{ __('Forgot your password? No problem. Just let us know your email address and we will email you a password reset link that will allow you to choose a new one.') }}
     </div>
 
     <!-- Session Status -->
     <x-auth-session-status class="mb-4" :status="session('status')" />
 
-    <form method="POST" action="{{ route('password.email') }}">
+    <form method="POST" action="{{ route('password.email') }}" data-validate data-pending="Sending reset link">
         @csrf
 
         <!-- Email Address -->

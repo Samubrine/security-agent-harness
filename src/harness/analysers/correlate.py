@@ -20,7 +20,7 @@ Three relations are distinguishable, and the middle one is why this is not a sim
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 from harness.models import Correlation, Observation
 from harness.util import canonical_json, new_id
@@ -45,9 +45,21 @@ PROVENANCE_FIELDS = frozenset(
 
 
 class Correlator:
-    def __init__(self, run_id: str = "") -> None:
+    def __init__(self, run_id: str = "", *, aliases: dict[str, str] | None = None) -> None:
+        """``aliases`` is the scope's alias map (``{"lab-web-01": "net:10.77.0.11"}``).
+
+        Providers name the same machine differently: a scanner reports the address it reached, an
+        MCP server only ever sees the alias (the runtime withholds the address from it). Without a
+        shared name the two would never be compared, so the second source would add evidence but
+        never agreement or conflict. Every target is mapped to its alias before keying.
+        """
         self.run_id = run_id
         self._correlations: list[Correlation] = []
+        self._canonical: dict[str, str] = {}
+        for alias, resource in (aliases or {}).items():
+            self._canonical[str(alias)] = str(alias)
+            address = str(resource).split(":", 1)[1] if ":" in str(resource) else str(resource)
+            self._canonical.setdefault(address, str(alias))
 
     def add(self, observations: Sequence[Observation]) -> list[Correlation]:
         """Correlate the observations supplied and return only the *new* correlations.
@@ -57,7 +69,7 @@ class Correlator:
         """
         groups: dict[str, list[Observation]] = defaultdict(list)
         for observation in observations:
-            key = self.key_for(observation)
+            key = self.key_for(observation, canonical=self._canonical)
             if key is not None:
                 groups[key].append(observation)
 
@@ -95,7 +107,7 @@ class Correlator:
         return existing.observation_ids == [obs.id for obs in group]
 
     @staticmethod
-    def key_for(observation: Observation) -> str | None:
+    def key_for(observation: Observation, *, canonical: dict[str, str] | None = None) -> str | None:
         """Identity of the subject two providers can agree or disagree about."""
         fields = KEY_FIELDS.get(observation.kind)
         if not fields:
@@ -103,7 +115,10 @@ class Correlator:
         value = observation.value or {}
         parts = [observation.kind]
         for field in fields:
-            parts.append(str(value.get(field, "?")))
+            raw = value.get(field, "?")
+            if field == "target" and canonical:
+                raw = canonical.get(str(raw), raw)
+            parts.append(str(raw))
             if value.get(field) in (None, "") and field in {"target", "cve"}:
                 # A subject with no target cannot be corroborated; correlating on "?" would create
                 # phantom agreements between unrelated observations.
@@ -141,13 +156,10 @@ class Correlator:
 
     @staticmethod
     def _comparable(observation: Observation) -> dict[str, Any]:
+        # `target` is part of the key, so every observation in a group already names the same
+        # machine; comparing the raw spelling (address vs alias) would report a phantom conflict.
         return {
             key: value
             for key, value in (observation.value or {}).items()
-            if key not in PROVENANCE_FIELDS
+            if key not in PROVENANCE_FIELDS and key != "target"
         }
-
-
-def conflicting_keys(correlations: Iterable[Correlation]) -> set[str]:
-    """Correlation keys currently in conflict, for the necessity gate's expansion decision."""
-    return {c.key for c in correlations if c.relation == "conflict"}

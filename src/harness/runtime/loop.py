@@ -13,18 +13,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from harness.analysers.cve_match import CveCandidate, VulnerabilitySnapshot
 from harness.context.cost import attribute_prompt_cost, memory_retrieval_cost
 from harness.errors import (
-    ApprovalRejected,
     BudgetExhausted,
     GrantError,
     HarnessError,
     ModelClientError,
     ParserError,
-    ProposalValidationError,
     ProviderError,
 )
 from harness.findings.builder import build_findings

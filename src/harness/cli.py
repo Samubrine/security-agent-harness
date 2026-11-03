@@ -7,7 +7,6 @@ looks like a decision belongs in the spine, where it can be tested without a ter
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -57,6 +56,12 @@ def run(
     model: Annotated[str, typer.Option("--model", help="Model id for the chosen backend.")] = "scripted-planner",
     endpoint: Annotated[str | None, typer.Option("--endpoint", help="Local model endpoint.")] = None,
     approvals: Annotated[str, typer.Option("--approvals", help="deny | approve | scripted")] = "deny",
+    approval_answers: Annotated[
+        str | None,
+        typer.Option("--approval-answers", help="With --approvals scripted: comma-separated yes/no, one per approval request in order."),
+    ] = None,
+    strict: Annotated[bool, typer.Option("--strict", help="Ask a human before MEDIUM-risk calls as well as HIGH-risk ones.")] = False,
+    mcp_config: Annotated[Path | None, typer.Option("--mcp-config", help="JSON file of MCP servers to register as providers.")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Render intentions without executing.")] = False,
     allow_remote: Annotated[bool, typer.Option("--allow-remote-egress", help="Permit a non-loopback model endpoint.")] = False,
     run_id: Annotated[str | None, typer.Option("--run-id", help="Override the generated run id.")] = None,
@@ -77,6 +82,9 @@ def run(
         endpoint=endpoint,
         target_alias=target,
         approval_mode=approvals,
+        approval_answers=_parse_answers(approval_answers),
+        strict=strict,
+        mcp_config=mcp_config,
         dry_run=dry_run,
         allow_remote=allow_remote,
         run_id=run_id,
@@ -115,6 +123,53 @@ def run(
     if artifacts.stop_reason:
         table.add_row("stopped because", artifacts.stop_reason)
     table.add_row("report", str(artifacts.report_markdown))
+    console.print(table)
+
+
+def _parse_answers(raw: str | None) -> tuple[bool, ...]:
+    if not raw:
+        return ()
+    answers: list[bool] = []
+    for word in raw.split(","):
+        word = word.strip().lower()
+        if word in {"yes", "y", "true", "1", "approve", "approved"}:
+            answers.append(True)
+        elif word in {"no", "n", "false", "0", "deny", "denied", "decline", "declined"}:
+            answers.append(False)
+        else:
+            raise typer.BadParameter(f"approval answer {word!r} is not yes or no", param_hint="--approval-answers")
+    return tuple(answers)
+
+
+@app.command()
+def skills(
+    json_output: Annotated[bool, typer.Option("--json", help="Print the skills as JSON.")] = False,
+) -> None:
+    """List the available skills, with the inputs each one requires."""
+    from harness.skills.loader import list_skills
+
+    specs = list_skills()
+    data = [
+        {
+            "name": spec.name,
+            "description": spec.description,
+            "inputs": {
+                name: (shape if isinstance(shape, dict) else {}) for name, shape in sorted(spec.inputs.items())
+            },
+            "capabilities": list(spec.capabilities),
+        }
+        for spec in specs
+    ]
+    if json_output:
+        console.print_json(json.dumps(data))
+        return
+    table = Table(title="skills")
+    table.add_column("name")
+    table.add_column("requires")
+    table.add_column("description")
+    for item in data:
+        required = ", ".join(f"{k} ({v.get('type')})" for k, v in item["inputs"].items() if v.get("required"))
+        table.add_row(item["name"], required or "-", item["description"])
     console.print(table)
 
 
@@ -210,7 +265,7 @@ def scope_sign(
     output: Annotated[Path | None, typer.Option("--out", help="Where to write the signed record.")] = None,
 ) -> None:
     """Attach an Ed25519 signature to a scope record."""
-    from harness.policy.scope import key_protection, load_scope, sign_scope
+    from harness.policy.scope import key_protection, sign_scope
     from harness.util import read_json
 
     from harness.models import ScopeFile

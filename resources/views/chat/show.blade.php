@@ -1,292 +1,167 @@
+@php
+    $modeLabels = [
+        'autonomous_investigation' => 'Autonomous investigation',
+        'guided_secops_copilot' => 'Guided copilot',
+        'strict_compliance_audit' => 'Compliance audit',
+        'triage_and_containment' => 'Triage & containment',
+    ];
+    $md = fn ($text) => \Illuminate\Support\Str::markdown((string) $text, ['html_input' => 'escape', 'allow_unsafe_links' => false]);
+    $messages = $chatSession->chatMessages;
+    $lastId = $messages->last()?->id;
+@endphp
 <x-app-layout>
-    <x-slot name="header">
-        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div class="flex items-center gap-3">
-                <a href="{{ route('chat.index') }}" class="p-2 rounded-xl bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 transition-colors">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
-                    </svg>
-                </a>
-                <div>
-                    <div class="flex items-center gap-2">
-                        <h2 class="font-bold text-xl text-gray-900 dark:text-white leading-tight">
-                            {{ $chatSession->title }}
-                        </h2>
-                        <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold {{ $chatSession->status === 'active' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300' }}">
-                            {{ ucfirst($chatSession->status) }}
-                        </span>
-                    </div>
-                    <div class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 mt-1 font-mono">
-                        <span>UUID: {{ $chatSession->session_uuid }}</span>
-                        <span>•</span>
-                        <span>Mode: <strong class="text-indigo-600 dark:text-indigo-400">{{ $chatSession->agent_mode }}</strong></span>
-                        <span>•</span>
-                        <span>Operator: {{ $chatSession->user->name ?? 'SecOps Operator' }}</span>
-                    </div>
-                </div>
-            </div>
+    <x-slot name="title">{{ $chatSession->title }}</x-slot>
+    <x-slot name="section">Agent</x-slot>
+    <x-slot name="breadcrumb">{{ \Illuminate\Support\Str::limit($chatSession->title, 48) }}</x-slot>
+
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow">Conversation</p>
+            <h1>{{ $chatSession->title }}</h1>
+            <p class="subtitle" style="font-size:14px;color:var(--text-muted)">{{ $modeLabels[$chatSession->agent_mode] ?? $chatSession->agent_mode }} · started {{ $chatSession->created_at->format('d M Y, H:i') }} · {{ ucfirst($chatSession->status) }}</p>
         </div>
-    </x-slot>
-
-    <div class="py-8">
-        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
-
-            <!-- Flash Status Message -->
-            @if(session('status'))
-                <div class="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-sm flex items-center justify-between">
-                    <div class="flex items-center gap-2 font-medium">
-                        <svg class="w-5 h-5 text-emerald-600" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                        </svg>
-                        {{ session('status') }}
-                    </div>
-                </div>
-            @endif
-
-            <!-- CHALLENGE 2: Live Query Optimization & N+1 Audit Banner -->
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700/60 overflow-hidden">
-                <div class="p-5 bg-gradient-to-r {{ $mode === 'optimized' ? 'from-emerald-950/40 via-gray-900 to-indigo-950/40 border-b border-emerald-800/30' : 'from-amber-950/40 via-gray-900 to-rose-950/40 border-b border-amber-800/30' }}">
-                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                        <div>
-                            <div class="flex items-center gap-2">
-                                <span class="px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider {{ $mode === 'optimized' ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-gray-900' }}">
-                                    {{ $mode === 'optimized' ? 'Tantangan 2: Teroptimasi' : 'Mode N+1 Unoptimized' }}
-                                </span>
-                                <h3 class="text-lg font-bold text-white">
-                                    {{ $mode === 'optimized' ? 'Nested Eager Loading Terbukti Bebas N+1 Query' : 'Demonstrasi Masalah N+1 Query (Lazy Loading)' }}
-                                </h3>
-                            </div>
-                            <p class="text-xs text-gray-300 mt-1">
-                                @if($mode === 'optimized')
-                                    Kueri menggunakan <code class="bg-black/50 px-1.5 py-0.5 rounded text-emerald-400 font-mono">ChatSession::with(['user', 'chatMessages.toolExecutionLogs.loggable'])</code>.
-                                @else
-                                    Kueri memanggil relasi secara bertahap dalam perulangan tanpa <code class="bg-black/50 px-1.5 py-0.5 rounded text-amber-400 font-mono">with()</code>, memicu query berulang (N+1).
-                                @endif
-                            </p>
-                        </div>
-
-                        <!-- Mode Switcher Buttons -->
-                        <div class="flex items-center bg-gray-900/80 p-1.5 rounded-xl border border-gray-700/60">
-                            <a href="{{ route('chat.show', ['id' => $chatSession->id, 'mode' => 'optimized']) }}" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all {{ $mode === 'optimized' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30' : 'text-gray-400 hover:text-white' }}">
-                                ⚡ Eager Loading
-                            </a>
-                            <a href="{{ route('chat.show', ['id' => $chatSession->id, 'mode' => 'lazy']) }}" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all {{ $mode === 'lazy' ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30' : 'text-gray-400 hover:text-white' }}">
-                                ⚠️ Lazy Loading (N+1)
-                            </a>
-                        </div>
-                    </div>
-
-                    <!-- Metrics Badges -->
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-4 border-t border-white/10">
-                        <div class="bg-black/30 backdrop-blur rounded-xl p-3 border border-white/5">
-                            <span class="text-xs text-gray-400 block font-medium">Total SQL Queries</span>
-                            <span class="text-2xl font-extrabold {{ $mode === 'optimized' ? 'text-emerald-400' : 'text-amber-400' }} mt-0.5 block">
-                                {{ $queryCount }} <span class="text-xs text-gray-400 font-normal">queries</span>
-                            </span>
-                        </div>
-                        <div class="bg-black/30 backdrop-blur rounded-xl p-3 border border-white/5">
-                            <span class="text-xs text-gray-400 block font-medium">Total Waktu Kueri</span>
-                            <span class="text-2xl font-extrabold text-indigo-300 mt-0.5 block">
-                                {{ $executionTimeMs }} <span class="text-xs text-gray-400 font-normal">ms</span>
-                            </span>
-                        </div>
-                        <div class="bg-black/30 backdrop-blur rounded-xl p-3 border border-white/5">
-                            <span class="text-xs text-gray-400 block font-medium">Status Masalah N+1</span>
-                            <span class="text-base font-bold {{ $mode === 'optimized' ? 'text-emerald-400' : 'text-rose-400' }} mt-1 block">
-                                {{ $mode === 'optimized' ? '✓ Bebas N+1 (Pass)' : '✗ Terdeteksi N+1' }}
-                            </span>
-                        </div>
-                        <div class="bg-black/30 backdrop-blur rounded-xl p-3 border border-white/5">
-                            <span class="text-xs text-gray-400 block font-medium">Inspeksi Debugbar</span>
-                            <span class="text-base font-bold text-gray-200 mt-1 block">
-                                Active at bottom ↘
-                            </span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Collapsible SQL Query Inspector -->
-                <div x-data="{ open: false }" class="border-t border-gray-100 dark:border-gray-700/60 bg-gray-50/50 dark:bg-gray-800/50">
-                    <button @click="open = !open" class="w-full px-5 py-3 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center justify-between">
-                        <span class="flex items-center gap-2">
-                            <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                            </svg>
-                            Inspeksi {{ $queryCount }} Kueri SQL Terjadwal (Klik untuk buka/tutup)
-                        </span>
-                        <svg class="w-4 h-4 transform transition-transform" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                        </svg>
-                    </button>
-                    <div x-show="open" x-cloak class="p-5 border-t border-gray-200 dark:border-gray-700 font-mono text-xs space-y-2 bg-gray-900 text-gray-200 overflow-x-auto">
-                        @foreach ($queries as $index => $q)
-                            <div class="p-2.5 rounded-lg bg-gray-950/80 border border-gray-800">
-                                <div class="flex items-center justify-between text-gray-400 mb-1 text-[11px]">
-                                    <span class="font-bold text-indigo-400">#{{ $index + 1 }} Query ({{ $q['time'] }} ms)</span>
-                                </div>
-                                <div class="text-emerald-300 break-words font-semibold">{{ $q['query'] }}</div>
-                                @if(!empty($q['bindings']))
-                                    <div class="text-gray-500 text-[10px] mt-1">Bindings: [{{ implode(', ', array_map(fn($b) => is_numeric($b) ? $b : "'$b'", $q['bindings'])) }}]</div>
-                                @endif
-                            </div>
-                        @endforeach
-                    </div>
-                </div>
-            </div>
-
-            <!-- CHAT CONVERSATION FEED -->
-            <div class="space-y-4">
-                @foreach ($chatSession->chatMessages as $msg)
-                    @if($msg->role === 'system')
-                        <!-- System Message -->
-                        <div class="flex justify-center my-4">
-                            <div class="px-4 py-2 rounded-xl bg-gray-200 dark:bg-gray-700/60 text-gray-700 dark:text-gray-300 text-xs font-mono flex items-center gap-2 border border-gray-300/50 dark:border-gray-600/50 shadow-sm">
-                                <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                </svg>
-                                {{ $msg->content }}
-                            </div>
-                        </div>
-                    @elseif($msg->role === 'user')
-                        <!-- User Message -->
-                        <div class="flex justify-end">
-                            <div class="max-w-2xl bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-2xl rounded-tr-sm p-4 shadow-md shadow-indigo-600/10">
-                                <div class="flex items-center justify-between text-xs text-indigo-200 mb-1 gap-4">
-                                    <span class="font-bold flex items-center gap-1.5">
-                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
-                                        </svg>
-                                        {{ $chatSession->user->name ?? 'SecOps Operator' }}
-                                    </span>
-                                    <span>{{ $msg->created_at->format('H:i:s') }}</span>
-                                </div>
-                                <p class="text-sm leading-relaxed whitespace-pre-wrap">{{ $msg->content }}</p>
-                            </div>
-                        </div>
-                    @else
-                        <!-- Assistant Message -->
-                        <div class="flex justify-start">
-                            <div class="max-w-3xl w-full bg-white dark:bg-gray-800 rounded-2xl rounded-tl-sm p-5 shadow-sm border border-gray-100 dark:border-gray-700/60 space-y-4">
-                                <div class="flex items-center justify-between border-b border-gray-100 dark:border-gray-700 pb-2.5">
-                                    <div class="flex items-center gap-2">
-                                        <div class="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-sm shadow-indigo-600/30">
-                                            AI
-                                        </div>
-                                        <span class="font-bold text-sm text-gray-900 dark:text-white">AEGIS Autonomous Harness</span>
-                                        <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-semibold">
-                                            {{ $msg->token_count }} tokens
-                                        </span>
-                                    </div>
-                                    <span class="text-xs text-gray-400 font-mono">{{ $msg->created_at->format('H:i:s') }}</span>
-                                </div>
-
-                                <p class="text-sm text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">
-                                    {{ $msg->content }}
-                                </p>
-
-                                <!-- CHALLENGE 1: Polymorphic Tool Execution Logs -->
-                                @if($msg->toolExecutionLogs->isNotEmpty())
-                                    <div class="space-y-3 pt-2">
-                                        <div class="flex items-center gap-2">
-                                            <span class="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                                🛠️ Log Pemanggilan Alat (Polymorphic Tool Execution Logs)
-                                            </span>
-                                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300">
-                                                {{ $msg->toolExecutionLogs->count() }} Eksekusi
-                                            </span>
-                                        </div>
-
-                                        @foreach ($msg->toolExecutionLogs as $toolLog)
-                                            <div x-data="{ showDetails: false }" class="rounded-xl border border-gray-200 dark:border-gray-700/80 bg-gray-50/75 dark:bg-gray-900/50 p-3.5 space-y-2">
-                                                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                                    <div class="flex items-center gap-2">
-                                                        <!-- Polymorphic Agent Pill -->
-                                                        @if($toolLog->loggable_type === 'App\Models\SecurityScanner')
-                                                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                                                                🛡️ SecurityScanner: {{ $toolLog->loggable?->nama ?? 'Scanner Agent' }}
-                                                            </span>
-                                                        @elseif($toolLog->loggable_type === 'App\Models\MalwareScanner')
-                                                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
-                                                                🦠 MalwareScanner: {{ $toolLog->loggable?->nama ?? 'Malware Agent' }}
-                                                            </span>
-                                                        @else
-                                                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                                                                📜 LogAnalyzer: {{ $toolLog->loggable?->nama ?? 'Analyzer Agent' }}
-                                                            </span>
-                                                        @endif
-
-                                                        <!-- Tool Name -->
-                                                        <span class="font-mono text-xs font-semibold text-gray-700 dark:text-gray-300">
-                                                            {{ $toolLog->tool_name }}
-                                                        </span>
-                                                    </div>
-
-                                                    <div class="flex items-center gap-2 text-xs">
-                                                        <span class="font-mono text-gray-500 dark:text-gray-400">⏱️ {{ $toolLog->durasi_ms }} ms</span>
-                                                        <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase {{ $toolLog->status === 'berhasil' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300' }}">
-                                                            {{ $toolLog->status }}
-                                                        </span>
-                                                        <button @click="showDetails = !showDetails" class="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline text-xs ml-1">
-                                                            <span x-text="showDetails ? 'Tutup Payload' : 'Lihat Payload'"></span>
-                                                        </button>
-                                                    </div>
-                                                </div>
-
-                                                <!-- Payload Details Drawer -->
-                                                <div x-show="showDetails" x-cloak class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 text-xs font-mono">
-                                                    <!-- Input Parameters -->
-                                                    <div class="p-2.5 rounded-lg bg-gray-900 text-gray-200 border border-gray-800">
-                                                        <span class="text-gray-400 font-bold block mb-1">Input Parameters (JSON):</span>
-                                                        <pre class="overflow-x-auto text-[11px] text-sky-300">{{ json_encode($toolLog->input, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
-                                                    </div>
-
-                                                    <!-- Output Payload -->
-                                                    <div class="p-2.5 rounded-lg bg-gray-900 text-gray-200 border border-gray-800">
-                                                        <span class="text-gray-400 font-bold block mb-1">Output Payload (JSON):</span>
-                                                        <pre class="overflow-x-auto text-[11px] text-emerald-300">{{ json_encode($toolLog->output, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        @endforeach
-                                    </div>
-                                @endif
-
-                            </div>
-                        </div>
-                    @endif
-                @endforeach
-            </div>
-
-            <!-- SEND MESSAGE FORM -->
-            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700/60 p-4 sticky bottom-4 z-10 backdrop-blur-md bg-white/95 dark:bg-gray-800/95">
-                <form action="{{ route('chat.message', $chatSession->id) }}" method="POST" class="space-y-3">
-                    @csrf
-                    <!-- Suggestion Chips -->
-                    <div class="flex flex-wrap items-center gap-2 text-xs">
-                        <span class="text-gray-500 dark:text-gray-400 font-medium">Contoh Prompt Cepat:</span>
-                        <button type="button" onclick="document.getElementById('messageInput').value = 'Scan network 192.168.1.0/24 for exposed vulnerabilities and open ports.'" class="px-2.5 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-indigo-50 hover:text-indigo-600 transition">
-                            🛡️ Scan Network Ports
-                        </button>
-                        <button type="button" onclick="document.getElementById('messageInput').value = 'Analyze malware payload binary in /var/quarantine/sample.bin with YARA signatures.'" class="px-2.5 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-rose-50 hover:text-rose-600 transition">
-                            🦠 Heuristic Malware Scan
-                        </button>
-                        <button type="button" onclick="document.getElementById('messageInput').value = 'Inspect auth.log for SSH brute force attacks and SQL injection patterns.'" class="px-2.5 py-1 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-amber-50 hover:text-amber-600 transition">
-                            📜 Correlate Log Anomalies
-                        </button>
-                    </div>
-
-                    <div class="flex items-center gap-3">
-                        <input id="messageInput" type="text" name="content" required placeholder="Ketik perintah investigasi untuk agen AI..." class="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 text-sm">
-                        <button type="submit" class="inline-flex items-center gap-2 px-5 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm rounded-xl shadow-md shadow-indigo-600/25 transition">
-                            <span>Kirim & Eksekusi Alat</span>
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path>
-                            </svg>
-                        </button>
-                    </div>
-                </form>
-            </div>
-
+        <div class="actions">
+            <a class="button" href="{{ route('chat.index') }}">All conversations</a>
+            <a class="button" href="{{ route('investigations.index') }}">Investigation workspace</a>
         </div>
     </div>
+
+    <div x-data="agentChat">
+    <section class="panel" aria-label="Conversation">
+        <div class="thread">
+        <div class="conversation">
+            @forelse ($messages as $msg)
+                @if ($msg->role === 'system')
+                    <div class="msg-system" @if($msg->id === $lastId) id="latest" @endif>{{ $msg->content }}</div>
+                @elseif ($msg->role === 'user')
+                    <div class="msg-user" @if($msg->id === $lastId) id="latest" @endif>
+                        <div class="msg-meta">{{ preg_replace('/\s*\(.*\)/', '', $chatSession->user->name ?? 'Operator') }} · {{ $msg->created_at->format('H:i') }}</div>
+                        <div class="msg-text">{{ $msg->content }}</div>
+                    </div>
+                @else
+                    <article class="msg-agent" @if($msg->id === $lastId) id="latest" tabindex="-1" @endif aria-label="Agent answer">
+                        <div class="msg-meta">
+                            <strong>AEGIS</strong>
+                            <span>{{ $msg->created_at->format('H:i') }}</span>
+                            <span class="badge">{{ number_format($msg->token_count) }} tokens</span>
+                            @if ($msg->toolExecutionLogs->isNotEmpty())<span class="badge">{{ $msg->toolExecutionLogs->count() }} tool {{ \Illuminate\Support\Str::plural('call', $msg->toolExecutionLogs->count()) }}</span>@endif
+                        </div>
+
+                        @if ($msg->toolExecutionLogs->isNotEmpty())
+                            <div class="steps">
+                                <div class="steps-title"><span>What the agent did</span><span>tool_execution_logs</span></div>
+                                @foreach ($msg->toolExecutionLogs->sortBy('id') as $toolLog)
+                                    @include('chat.partials.tool-log', ['toolLog' => $toolLog])
+                                @endforeach
+                            </div>
+                        @endif
+
+                        @if ($msg->reasoning)
+                            <details class="reasoning">
+                                <summary>Show reasoning</summary>
+                                <div class="rendered-report">{!! $md($msg->reasoning) !!}</div>
+                            </details>
+                        @endif
+
+                        <div class="rendered-report">{!! $md($msg->content) !!}</div>
+
+                        @include('chat.partials.fact-check', ['check' => $msg->claim_check])
+                        @if (is_array($msg->pending_action))
+                            @include('chat.partials.pending-action', ['action' => $msg->pending_action, 'message' => $msg, 'isLatest' => $msg->id === $lastId])
+                        @endif
+                    </article>
+                @endif
+            @empty
+                <div class="empty">
+                    <span class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg></span>
+                    <strong>Ask your first question</strong>
+                    <p>Try one of the suggestions below, or describe what you want checked in your own words.</p>
+                </div>
+            @endforelse
+        </div>
+        </div>
+    </section>
+
+    <section class="composer" aria-label="Message the agent">
+      <div class="composer-inner">
+        <div class="live" x-ref="live" x-show="busy || error" x-cloak x-transition.opacity.duration.150ms>
+            <div class="live-head">
+                <span class="live-chip" x-show="busy"><i aria-hidden="true"></i>Live</span>
+                <span class="working" x-show="busy" x-text="status">The agent is working.</span>
+            </div>
+            <ol class="live-steps" aria-live="polite" aria-label="Agent progress">
+                <template x-for="(s, i) in steps" :key="i">
+                    <li class="live-step" :class="[s.kind, s.state]">
+                        <span class="live-dot" aria-hidden="true"></span>
+                        <span class="live-label" x-text="s.label + (s.count > 1 ? ' (×' + s.count + ')' : '')"></span>
+                        <span class="live-result" x-show="s.result" x-text="s.result"></span>
+                    </li>
+                </template>
+            </ol>
+            <p class="field-error" role="alert" x-show="error"><span x-text="error"></span> <button type="button" class="button small" @click="retry()">Try again</button></p>
+        </div>
+        @error('content')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+        <form method="POST" action="{{ route('chat.message', $chatSession->id) }}" @submit.prevent="run($el)" novalidate>
+            @csrf
+            <div class="chips" x-show="!busy" aria-label="Suggested questions">
+                @foreach ([
+                    'Is lab-web-01 safe? Check it and explain the most serious risks.',
+                    'Was Tomcat on lab-web-01 really patched? Check against the asset inventory.',
+                    'Scan the web server.',
+                    'Analyse lab-logs. Did someone break in?',
+                    'What have we found so far?',
+                ] as $prompt)
+                    <button type="button" class="button small" @click="$refs.input.value = @js($prompt); invalid = false; $refs.input.focus()">{{ $prompt }}</button>
+                @endforeach
+            </div>
+            <label class="sr-only" for="messageInput">Message</label>
+            <div class="compose-box" :class="{ invalid }">
+                <textarea id="messageInput" x-ref="input" name="content" rows="1" required maxlength="4000" :readonly="busy"
+                    :aria-invalid="invalid" aria-describedby="composer-help"
+                    placeholder="Ask the agent, e.g. “Apakah lab-web-01 aman?”"
+                    @input="invalid = false; $el.style.height = 'auto'; $el.style.height = Math.min($el.scrollHeight, 180) + 'px'"
+                    @keydown.enter="if (!$event.shiftKey && !$event.isComposing) { $event.preventDefault(); run($el.form) }">{{ old('content') }}</textarea>
+                <button type="submit" class="button primary" :class="{ 'is-loading': busy, 'is-success': sent }" :disabled="busy"><span>Send</span></button>
+            </div>
+            <p class="field-error" role="alert" x-show="invalid" x-cloak>Write a question first, at least two characters.</p>
+            <p class="hint" id="composer-help">Enter sends · Shift+Enter adds a line · Checks only run against the signed lab scope.</p>
+        </form>
+      </div>
+    </section>
+    </div>
+
+    {{-- Week 9 (relational modelling): eager loading vs N+1 on this page's own query. --}}
+    <details class="panel inspector acc" @if($mode === 'lazy') open @endif>
+        <summary>
+            <span>Query inspector · Pertemuan 9</span>
+            <span class="hint" style="font-weight:400">{{ $queryCount }} queries · {{ $executionTimeMs }} ms</span>
+        </summary>
+        <div class="inspector-body">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                <div>
+                    <span class="badge">{{ $mode === 'optimized' ? 'Tantangan 2: Teroptimasi' : 'Mode N+1 Unoptimized' }}</span>
+                    <p class="hint" style="margin-top:8px">{{ $mode === 'optimized' ? 'Nested Eager Loading Terbukti Bebas N+1 Query' : 'Demonstrasi Masalah N+1 Query (Lazy Loading)' }}:
+                        @if ($mode === 'optimized')
+                            <code>ChatSession::with(['user', 'chatMessages.toolExecutionLogs.loggable'])</code>
+                        @else
+                            relations are loaded one by one inside the loop, without <code>with()</code>.
+                        @endif
+                    </p>
+                </div>
+                <div class="segmented">
+                    <a class="{{ $mode === 'optimized' ? 'on' : '' }}" href="{{ route('chat.show', ['id' => $chatSession->id, 'mode' => 'optimized']) }}">Eager loading</a>
+                    <a class="{{ $mode === 'lazy' ? 'on' : '' }}" href="{{ route('chat.show', ['id' => $chatSession->id, 'mode' => 'lazy']) }}">Lazy loading (N+1)</a>
+                </div>
+            </div>
+            <div class="stats">
+                <section class="stat"><div class="stat-label">SQL queries</div><div class="stat-number {{ $mode === 'lazy' ? 'critical-text' : 'ok-text' }}">{{ $queryCount }}</div></section>
+                <section class="stat"><div class="stat-label">Query time</div><div class="stat-number">{{ $executionTimeMs }}<small style="font-size:12px"> ms</small></div></section>
+                <section class="stat"><div class="stat-label">N+1 status</div><div class="stat-number" style="font-size:16px;margin-top:20px">{{ $mode === 'optimized' ? '✓ Bebas N+1 (Pass)' : '✗ Terdeteksi N+1' }}</div></section>
+                <section class="stat"><div class="stat-label">Messages / tool logs</div><div class="stat-number">{{ $messages->count() }} / {{ $messages->sum(fn ($m) => $m->toolExecutionLogs->count()) }}</div></section>
+            </div>
+            @foreach ($queries as $index => $q)
+                <div class="query"><span>#{{ $index + 1 }} · {{ $q['time'] }} ms</span>{{ $q['query'] }}@if(! empty($q['bindings'])) <span>bindings: [{{ implode(', ', array_map(fn ($b) => is_numeric($b) ? $b : "'".$b."'", $q['bindings'])) }}]</span>@endif</div>
+            @endforeach
+        </div>
+    </details>
 </x-app-layout>

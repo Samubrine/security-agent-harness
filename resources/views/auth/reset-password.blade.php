@@ -1,5 +1,9 @@
 <x-guest-layout>
-    <form method="POST" action="{{ route('password.store') }}">
+    <x-slot name="title">Choose a new password</x-slot>
+    <x-slot name="heading">Choose a new password</x-slot>
+    <x-slot name="lead">Use a long, unique password.</x-slot>
+
+    <form method="POST" action="{{ route('password.store') }}" data-validate data-pending="Saving new password">
         @csrf
 
         <!-- Password Reset Token -->
@@ -15,7 +19,7 @@
         <!-- Password -->
         <div class="mt-4">
             <x-input-label for="password" :value="__('Password')" />
-            <x-text-input id="password" class="block mt-1 w-full" type="password" name="password" required autocomplete="new-password" />
+            <x-text-input id="password" class="block mt-1 w-full" type="password" data-reveal-toggle name="password" required autocomplete="new-password" />
             <x-input-error :messages="$errors->get('password')" class="mt-2" />
         </div>
 

@@ -27,18 +27,6 @@ class GrantError(HarnessError):
     """Grant is unknown, expired, revoked, or does not cover the request."""
 
 
-class ProposalValidationError(HarnessError):
-    """A model proposal failed schema, catalogue, grant, or argument validation."""
-
-
-class PolicyDenied(HarnessError):
-    """Policy denied the invocation. Not retryable without new authority."""
-
-
-class ApprovalRejected(HarnessError):
-    """A human rejected an ``ask`` verdict. Terminal for that invocation."""
-
-
 class NecessityDenied(HarnessError):
     """The necessity gate refused to spend budget on a provider call."""
 

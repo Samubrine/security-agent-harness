@@ -20,5 +20,9 @@
     "optionalDependencies": {
         "@laravel/multiplex": "^0.4.1",
         "@rolldown/binding-win32-x64-msvc": "^1.2.16"
+    },
+    "dependencies": {
+        "@fontsource-variable/geist": "^5.3.0",
+        "@fontsource-variable/geist-mono": "^5.3.0"
     }
 }

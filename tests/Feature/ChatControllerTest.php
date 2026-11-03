@@ -3,9 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\ChatSession;
-use App\Models\SecurityScanner;
+use App\Models\KnowledgeSource;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class ChatControllerTest extends TestCase
@@ -20,7 +21,7 @@ class ChatControllerTest extends TestCase
         $response = $this->actingAs($user)->get(route('chat.index'));
 
         $response->assertStatus(200);
-        $response->assertSee('Agentic AI Chat Sessions');
+        $response->assertSee('Is your lab safe?');
     }
 
     public function test_authenticated_user_can_view_chat_show_optimized_and_lazy_modes(): void
@@ -54,27 +55,62 @@ class ChatControllerTest extends TestCase
         $this->assertDatabaseHas('chat_sessions', ['title' => 'Investigasi Zero Day Breach']);
     }
 
-    public function test_authenticated_user_can_send_message_and_trigger_agent_tool(): void
+    public function test_sending_a_message_runs_the_agent_and_logs_its_tool_calls(): void
     {
         $user = User::factory()->create();
         $session = ChatSession::factory()->create(['user_id' => $user->id]);
-        SecurityScanner::factory()->create();
+        Http::fake([
+            'nvd.test/*' => Http::response(['vulnerabilities' => [['cve' => [
+                'id' => 'CVE-2021-41773',
+                'descriptions' => [['lang' => 'en', 'value' => 'Path traversal in Apache HTTP Server 2.4.49.']],
+                'metrics' => ['cvssMetricV31' => [['type' => 'Primary', 'cvssData' => ['baseScore' => 7.5, 'baseSeverity' => 'HIGH']]]],
+            ]]]]),
+            'llm.test/*' => Http::sequence()
+                ->push($this->llmReply('', [['lookup_cve', ['cve_id' => 'CVE-2021-41773']]]))
+                ->push($this->llmReply('CVE-2021-41773 is a **path traversal** bug (CVSS 7.5).')),
+        ]);
 
         $response = $this->actingAs($user)->post(route('chat.message', $session->id), [
-            'content' => 'Scan port network 192.168.1.1/24 for vulnerabilities',
+            'content' => 'Explain CVE-2021-41773',
         ]);
 
-        $response->assertRedirect(route('chat.show', $session->id));
-        $this->assertDatabaseHas('chat_messages', [
-            'chat_session_id' => $session->id,
-            'role' => 'user',
-        ]);
-        $this->assertDatabaseHas('chat_messages', [
-            'chat_session_id' => $session->id,
-            'role' => 'assistant',
-        ]);
-        $this->assertDatabaseHas('tool_execution_logs', [
-            'tool_name' => 'nmap_stealth_recon',
-        ]);
+        $response->assertRedirect(route('chat.show', $session->id).'#latest');
+        $this->assertDatabaseHas('chat_messages', ['chat_session_id' => $session->id, 'role' => 'user', 'content' => 'Explain CVE-2021-41773']);
+        $this->assertDatabaseHas('chat_messages', ['chat_session_id' => $session->id, 'role' => 'assistant', 'content' => 'CVE-2021-41773 is a **path traversal** bug (CVSS 7.5).']);
+        $this->assertDatabaseHas('tool_execution_logs', ['tool_name' => 'lookup_cve', 'status' => 'success', 'loggable_type' => KnowledgeSource::class]);
+
+        // The answer is rendered as Markdown and the tool call is shown with its real fields.
+        $this->actingAs($user)->get(route('chat.show', $session->id))
+            ->assertOk()
+            ->assertSee('<strong>path traversal</strong>', false)
+            ->assertSee('NVD CVE Database')
+            ->assertSee('CVSS 7.5');
+    }
+
+    public function test_agent_answers_cannot_inject_html(): void
+    {
+        $user = User::factory()->create();
+        $session = ChatSession::factory()->create(['user_id' => $user->id]);
+        Http::fake(['llm.test/*' => Http::response($this->llmReply('<script>alert(1)</script> [x](javascript:alert(1))'))]);
+
+        $this->actingAs($user)->post(route('chat.message', $session->id), ['content' => 'hi']);
+
+        $this->actingAs($user)->get(route('chat.show', $session->id))
+            ->assertOk()
+            ->assertDontSee('<script>alert(1)</script>', false)
+            ->assertDontSee('href="javascript:', false);
+    }
+
+    public function test_users_cannot_see_or_post_to_each_others_sessions(): void
+    {
+        $owner = User::factory()->create();
+        $intruder = User::factory()->create();
+        $session = ChatSession::factory()->create(['user_id' => $owner->id, 'title' => 'Owner only investigation']);
+
+        $this->actingAs($intruder)->get(route('chat.show', $session->id))->assertNotFound();
+        $this->actingAs($intruder)->get(route('chat.show', ['id' => $session->id, 'mode' => 'lazy']))->assertNotFound();
+        $this->actingAs($intruder)->post(route('chat.message', $session->id), ['content' => 'hello'])->assertNotFound();
+        $this->actingAs($intruder)->get(route('chat.index'))->assertDontSee('Owner only investigation');
+        $this->assertDatabaseMissing('chat_messages', ['content' => 'hello']);
     }
 }
