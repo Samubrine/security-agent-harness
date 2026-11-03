@@ -86,6 +86,8 @@ erDiagram
     USERS ||--o{ CHAT_SESSIONS : "has_many"
     CHAT_SESSIONS ||--o{ CHAT_MESSAGES : "has_many"
     CHAT_MESSAGES ||--o{ TOOL_EXECUTION_LOGS : "has_many"
+    CHAT_SESSIONS ||--o{ EVIDENCE_ARTIFACTS : "has_many"
+    TOOL_EXECUTION_LOGS ||--o{ EVIDENCE_ARTIFACTS : "has_many"
 
     TOOL_EXECUTION_LOGS }o--|| SECURITY_SCANNERS : "morphs_to"
     TOOL_EXECUTION_LOGS }o--|| MALWARE_SCANNERS : "morphs_to"
@@ -119,9 +121,23 @@ erDiagram
         bigint chat_session_id FK
         string role
         text content
-        text reasoning
+        longtext reasoning
+        json pending_action
+        json claim_check
         integer token_count
         integer sequence_number
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    EVIDENCE_ARTIFACTS {
+        bigint id PK
+        bigint chat_session_id FK
+        bigint tool_execution_log_id FK
+        string kind
+        string source
+        char sha256 "indexed"
+        json content
         timestamp created_at
         timestamp updated_at
     }
@@ -200,7 +216,12 @@ erDiagram
    - Sebuah `ChatMessage` (khususnya giliran respons agen AI) dapat memicu satu atau lebih pemanggilan alat otomatis (`ToolExecutionLog`).
    - `ToolExecutionLog` memiliki foreign key `chat_message_id` yang mereferensikan `chat_messages.id` dengan `onDelete('cascade')`.
 
-4. **Integritas Cascade Deletion (`onDelete('cascade')`)**
+4. **EvidenceArtifact (`belongsTo` ChatSession dan ToolExecutionLog)**
+   - Tabel `evidence_artifacts` menyimpan bukti hasil alat (`kind`, `source`, `content`) beserta hash `sha256` untuk verifikasi klaim agen.
+   - Foreign key `chat_session_id` dan `tool_execution_log_id` keduanya `onDelete('cascade')`.
+   - Kolom `chat_messages.pending_action` (JSON) menyimpan aksi yang menunggu persetujuan operator; `chat_messages.claim_check` (JSON) menyimpan hasil pemeriksaan klaim terhadap bukti.
+
+5. **Integritas Cascade Deletion (`onDelete('cascade')`)**
    - Semua foreign key constraints secara ketat menerapkan `->onDelete('cascade')`.
    - Menghapus sebuah `ChatSession` akan secara otomatis dan bersih menghapus seluruh `ChatMessage` serta semua `ToolExecutionLog` terkait di bawahnya tanpa meninggalkan data yatim (*orphan records*).
 
