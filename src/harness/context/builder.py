@@ -58,10 +58,6 @@ class ContextBuilder:
 
     # -- tier text -------------------------------------------------------------------------
 
-    def memory_tier(self, resolved: ResolvedContext, *, spotlight: Spotlight | None = None) -> str:
-        """The whole memory block, C1 followed by C3, for callers that want the text as one string."""
-        c1, c3 = self.memory_tiers(resolved, spotlight=spotlight)
-        return "\n".join(part for part in (c1, c3) if part.strip())
 
     def memory_tiers(
         self, resolved: ResolvedContext, *, spotlight: Spotlight | None = None
@@ -113,8 +109,9 @@ class ContextBuilder:
         system = system_prompt()
         # Each tier is clamped to its own ceiling and counted from the text that survived it, so the
         # tier numbers describe the prompt that was sent rather than a version of it (R2-27).
-        c1_text = clamp_text(self.memory_tiers(resolved, spotlight=spotlight)[0], self.tier_caps["C1"] * 4)
-        c3_text = clamp_text(self.memory_tiers(resolved, spotlight=spotlight)[1], self.tier_caps["C3"] * 4)
+        c1_raw, c3_raw = self.memory_tiers(resolved, spotlight=spotlight)
+        c1_text = clamp_text(c1_raw, self.tier_caps["C1"] * 4)
+        c3_text = clamp_text(c3_raw, self.tier_caps["C3"] * 4)
         memory_text = "\n".join(part for part in (c1_text, c3_text) if part.strip())
         digest_text = _bounded_digest(run_digest, self.tier_caps["C2"] * 4)
         evidence_text = clamp_text(evidence_rollup, self.tier_caps["C4"] * 4)

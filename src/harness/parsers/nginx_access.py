@@ -22,7 +22,7 @@ from typing import Any, Callable
 
 from harness.models import EvidenceGap, EvidenceRef, Observation, ProviderExecution, TrustClass
 from harness.parsers.registry import ParseContext, ParseResult, injection_observations
-from harness.util import clamp_text, new_id, strip_control_chars
+from harness.util import clamp_text, iter_nonempty_lines, new_id, strip_control_chars
 
 NGINX_MEDIA_TYPE = "text/x-nginx-access"
 PARSER_NAME = "nginx_access"
@@ -184,7 +184,7 @@ def parse_nginx_access(
 
 def _extract(data: bytes) -> list[_Request]:
     out: list[_Request] = []
-    for line, start, end in _iter_lines(data):
+    for line, start, end in iter_nonempty_lines(data):
         text = line.decode("utf-8", errors="replace").strip()
         match = _COMBINED.match(text)
         if not match:
@@ -298,15 +298,3 @@ def _timestamp(value: str) -> datetime | None:
         ).astimezone(UTC)
     except ValueError:
         return None
-
-
-def _iter_lines(data: bytes) -> list[tuple[bytes, int, int]]:
-    out: list[tuple[bytes, int, int]] = []
-    offset = 0
-    for raw in data.split(b"\n"):
-        start = offset
-        end = offset + len(raw)
-        if raw.strip():
-            out.append((raw, start, end))
-        offset = end + 1
-    return out

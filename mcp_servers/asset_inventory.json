@@ -1,0 +1,19 @@
+{
+  "note": "What the operations team believes is installed. Deliberately not identical to what the scan sees: lab-web-01's Tomcat was 'patched' on paper but the scan still sees 9.0.30.",
+  "hosts": {
+    "lab-web-01": {
+      "updated": "2026-08-30",
+      "services": [
+        {"port": 22, "service": "ssh", "product": "OpenSSH", "version": "8.2p1 Ubuntu 4ubuntu0.5", "cpe": "cpe:/a:openbsd:openssh:8.2p1"},
+        {"port": 80, "service": "http", "product": "nginx", "version": "1.18.0", "cpe": "cpe:/a:nginx:nginx:1.18.0"},
+        {"port": 8080, "service": "http", "product": "Apache Tomcat", "version": "9.0.31", "cpe": "cpe:/a:apache:tomcat:9.0.31"}
+      ]
+    },
+    "lab-web-02": {
+      "updated": "2026-08-30",
+      "services": [
+        {"port": 443, "service": "https", "product": "nginx", "version": "1.18.0", "cpe": "cpe:/a:nginx:nginx:1.18.0"}
+      ]
+    }
+  }
+}

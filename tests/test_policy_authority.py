@@ -341,7 +341,6 @@ def test_a_provider_that_takes_no_ports_is_not_bounded_by_a_port_window(tmp_path
     The offline matcher and the log reader have no `ports` argument, so a window cannot constrain
     them - and refusing their calls would stop evidence the scope authorises.
     """
-    from harness.providers.base import ProviderRequest
 
     book, _ = _book(tmp_path, _scope(ports=[80]))
     grant = book.grants[0]

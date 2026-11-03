@@ -11,7 +11,7 @@ from pathlib import Path
 
 from harness.context.retrieval import retrieve_for_plan
 from harness.memory.manager import MemoryManager
-from harness.models import Grant, MemoryDigests, RetrievedMemory, ScopeFile, SkillSpec
+from harness.models import MemoryDigests, RetrievedMemory, ScopeFile, SkillSpec
 from harness.policy.grants import GrantBook, mint_from_scope
 from harness.policy.scope import load_scope
 from harness.skills import load_skill
@@ -29,8 +29,6 @@ class ResolvedContext:
     active_text: str
     retrieved: list[RetrievedMemory]
 
-    def grant_map(self) -> dict[str, Grant]:
-        return {grant.id: grant for grant in self.grants.grants}
 
     def aliases(self) -> list[str]:
         return sorted({grant.alias for grant in self.grants.grants})

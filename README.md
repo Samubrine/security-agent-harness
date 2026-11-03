@@ -5,7 +5,7 @@ investigation capabilities are dropped in as *skills*, *native tools*, and *MCP 
 and a locally hosted LLM decides what to investigate next inside a deterministic, auditable
 runtime.
 
-This is a CLI, not a desktop GUI or an interactive full-screen TUI. Commands print formatted
+The investigation engine is a CLI, with an optional local browser dashboard for reviewing saved runs. Commands print formatted
 status and write auditable run artifacts and reports to disk. New users should start with the
 cross-platform [Quick start](docs/QUICKSTART.md).
 
@@ -25,10 +25,357 @@ before starting work on anything in this repository: it names, per task, which c
 first.
 
 ```text
-728 tests collected, 727 passing, 1 skipped on Linux / Python 3.14 (about 11s)
+729 tests collected, 728 passing, 1 skipped on Linux / Python 3.13 (about 16s)
 port_scan / log_analysis / injection_resistance / entry_point: every scenario passes its
 precision, recall, hallucination, evidence-binding and scope-compliance targets
 ```
+
+---
+
+## 🤖 Chat Agen AI: LLM + Harness dalam satu aplikasi
+
+Aplikasi Laravel adalah antarmuka; **LLM** (`qwen3:14b` lewat gateway LLM ITS, atau endpoint OpenAI-compatible lain via `.env`) adalah otaknya; **harness Python** dan **database CVE publik NVD** adalah alatnya. Model sendiri yang memutuskan alat mana yang dipanggil dan kapan jawabannya sudah cukup. Itulah bagian *agentic*-nya.
+
+```mermaid
+flowchart LR
+    U[Operator] -->|pertanyaan| C[ChatSessionController]
+    C --> A[AgentRunner<br/>loop maks. 6 langkah]
+    A <-->|messages + tools| L[(LLM gateway<br/>qwen3:14b)]
+    A -->|tool call| T{ToolRegistry}
+    T --> R[run_investigation] -->|subprocess| H[Harness Python<br/>scope bertanda tangan, policy, bukti]
+    T --> LI[list_investigations /<br/>get_investigation] --> F[(Arsip temuan<br/>storage/app/harness-runs)]
+    T --> N[lookup_cve /<br/>search_cves] --> V[(NIST NVD API)]
+    A -->|setiap pemanggilan| DB[(tool_execution_logs<br/>polymorphic)]
+```
+
+| Alat | Fungsi | Pemilik polimorfik (`loggable`) |
+|---|---|---|
+| `run_investigation` | Menjalankan investigasi baru (`port_scan`, `log_analysis`, `entry_point`) pada target di scope lab | `SecurityScanner` / `LogAnalyzer` |
+| `list_investigations`, `get_investigation` | Membaca hasil investigasi sebelumnya agar tidak mengulang pekerjaan | `KnowledgeSource` (arsip temuan) |
+| `lookup_cve`, `search_cves` | Informasi publik: skor CVSS, jenis kelemahan (CWE), status *known exploited* CISA, tautan patch | `KnowledgeSource` (NVD) |
+
+Antarmuka web memakai desain dashboard AEGIS (`src/harness/web`): sidebar yang sama, token warna, dan mode terang/gelap. Dashboard harness sendiri kini menjadi halaman **Investigation workspace** di Laravel (`resources/js/workspace.js`, data dari `/investigations/runs`), dan setiap investigasi yang dijalankan agen punya tautan *Open full report in workspace*.
+
+Contoh rantai otomatis untuk *"Apakah lab-web-01 aman?"*: `run_investigation(port_scan)`, lalu `lookup_cve` untuk CVE paling kritis yang ditemukan, lalu jawaban yang menyebut `run_id`, membedakan temuan *confirmed* dan *possible*, dan memberi langkah perbaikan.
+
+Batas keamanan: model hanya memilih **alat** dan **alias target** (`lab-web-01`, `lab-logs`, ...). Laravel memvalidasi argumen, harness memverifikasi scope bertanda tangan, dan output alat diperlakukan sebagai data tak tepercaya (banner di lab sengaja berisi *prompt injection*). Penalaran model (`<think>`) disimpan di `chat_messages.reasoning` dan bisa dibuka di UI. Kode: `app/Agent/`, konfigurasi: `config/agent.php`. Detail desain: [docs/design/09-agentic-chat.md](docs/design/09-agentic-chat.md).
+
+---
+
+## 🗄️ Pemodelan Basis Data Relasional & ERD (Tugas Pertemuan 9 - PBKK)
+
+Bagian ini mendokumentasikan hasil rancangan dan implementasi basis data relasional di Laravel untuk mendukung fitur kompleks pada **Proyek Kelompok Platform Agentic AI**.
+
+### 👥 Identitas Kelompok 6
+| No | NRP | Nama Mahasiswa |
+|---|---|---|
+| 1 | **5025241046** | **Mikail Ibrahim Hakim** |
+| 2 | **5025241094** | **Fayza Lathifah Humam** |
+| 3 | **5025241097** | **Adriel Mahira Dharma** |
+| 4 | **5025241118** | **Muhammad Adi Anugerah Arrahman** |
+| 5 | **5025241164** | **Alfianz Risqia Ilahi Loven Kary** |
+
+---
+
+### 📊 Entity-Relationship Diagram (ERD)
+
+Berikut adalah diagram relasi basis data relasional lengkap yang memodelkan relasi hirarki sesi obrolan, pesan, dan pemanggilan alat polimorfik (*Polymorphic Tool Calling*):
+
+```mermaid
+erDiagram
+    USERS ||--o{ CHAT_SESSIONS : "has_many"
+    CHAT_SESSIONS ||--o{ CHAT_MESSAGES : "has_many"
+    CHAT_MESSAGES ||--o{ TOOL_EXECUTION_LOGS : "has_many"
+    CHAT_SESSIONS ||--o{ EVIDENCE_ARTIFACTS : "has_many"
+    TOOL_EXECUTION_LOGS ||--o{ EVIDENCE_ARTIFACTS : "has_many"
+
+    TOOL_EXECUTION_LOGS }o--|| SECURITY_SCANNERS : "morphs_to"
+    TOOL_EXECUTION_LOGS }o--|| MALWARE_SCANNERS : "morphs_to"
+    TOOL_EXECUTION_LOGS }o--|| LOG_ANALYZERS : "morphs_to"
+    TOOL_EXECUTION_LOGS }o--|| KNOWLEDGE_SOURCES : "morphs_to"
+
+    USERS {
+        bigint id PK
+        string name
+        string email UK
+        timestamp email_verified_at
+        string password
+        string remember_token
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    CHAT_SESSIONS {
+        bigint id PK
+        bigint user_id FK
+        string title
+        uuid session_uuid UK
+        string status
+        string agent_mode
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    CHAT_MESSAGES {
+        bigint id PK
+        bigint chat_session_id FK
+        string role
+        text content
+        longtext reasoning
+        json pending_action
+        json claim_check
+        integer token_count
+        integer sequence_number
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    EVIDENCE_ARTIFACTS {
+        bigint id PK
+        bigint chat_session_id FK
+        bigint tool_execution_log_id FK
+        string kind
+        string source
+        char sha256 "indexed"
+        json content
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    TOOL_EXECUTION_LOGS {
+        bigint id PK
+        bigint chat_message_id FK
+        string tool_name
+        string status
+        json input_parameters
+        json output_payload
+        integer execution_time_ms
+        string loggable_type
+        bigint loggable_id
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    SECURITY_SCANNERS {
+        bigint id PK
+        string name
+        string scanner_type
+        string engine
+        string target_scope
+        string version
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    MALWARE_SCANNERS {
+        bigint id PK
+        string name
+        string signature_db_version
+        string heuristic_level
+        string engine
+        string version
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    LOG_ANALYZERS {
+        bigint id PK
+        string name
+        string log_format
+        string pattern_ruleset
+        string severity_threshold
+        string version
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    KNOWLEDGE_SOURCES {
+        bigint id PK
+        string name
+        string source_type
+        string provider
+        string endpoint
+        timestamp created_at
+        timestamp updated_at
+    }
+```
+
+---
+
+### 🏛️ Aturan Pemetaan Relasional & Integritas Data
+
+1. **User ↔ ChatSession (`hasMany` / `belongsTo`)**
+   - Seorang `User` (model bawaan Laravel Breeze) dapat memiliki banyak sesi investigasi (`ChatSession`).
+   - `ChatSession` memiliki foreign key `user_id` yang mereferensikan `users.id` dengan aturan integrity `onDelete('cascade')`.
+
+2. **ChatSession ↔ ChatMessage (`hasMany` / `belongsTo`)**
+   - Sebuah `ChatSession` memiliki banyak pesan obrolan (`ChatMessage`), yang mencatat giliran dialog antara operator manusia dan agen AI.
+   - `ChatMessage` memiliki foreign key `chat_session_id` yang mereferensikan `chat_sessions.id` dengan `onDelete('cascade')`.
+
+3. **ChatMessage ↔ ToolExecutionLog (`hasMany` / `belongsTo`)**
+   - Sebuah `ChatMessage` (khususnya giliran respons agen AI) dapat memicu satu atau lebih pemanggilan alat otomatis (`ToolExecutionLog`).
+   - `ToolExecutionLog` memiliki foreign key `chat_message_id` yang mereferensikan `chat_messages.id` dengan `onDelete('cascade')`.
+
+4. **EvidenceArtifact (`belongsTo` ChatSession dan ToolExecutionLog)**
+   - Tabel `evidence_artifacts` menyimpan bukti hasil alat (`kind`, `source`, `content`) beserta hash `sha256` untuk verifikasi klaim agen.
+   - Foreign key `chat_session_id` dan `tool_execution_log_id` keduanya `onDelete('cascade')`.
+   - Kolom `chat_messages.pending_action` (JSON) menyimpan aksi yang menunggu persetujuan operator; `chat_messages.claim_check` (JSON) menyimpan hasil pemeriksaan klaim terhadap bukti.
+
+5. **Integritas Cascade Deletion (`onDelete('cascade')`)**
+   - Semua foreign key constraints secara ketat menerapkan `->onDelete('cascade')`.
+   - Menghapus sebuah `ChatSession` akan secara otomatis dan bersih menghapus seluruh `ChatMessage` serta semua `ToolExecutionLog` terkait di bawahnya tanpa meninggalkan data yatim (*orphan records*).
+
+---
+
+### 🌟 Tantangan 1: Polymorphic Logging (Challenge Nilai Plus A+)
+
+Platform Agentic AI mendukung berbagai macam agen investigasi terspesialisasi (`SecurityScanner`, `MalwareScanner`, `LogAnalyzer`). Agar satu tabel log aktivitas dapat direferensikan oleh tipe model agen yang berbeda secara fleksibel tanpa membuat tabel log terpisah:
+
+- Pada migrasi `create_tool_execution_logs_table`, digunakan helper polimorfik bawaan Laravel:
+  ```php
+  $table->morphs('loggable');
+  ```
+  Hal ini secara otomatis menghasilkan dua kolom terindeks: `loggable_type` (VARCHAR) dan `loggable_id` (BIGINT).
+- Pada model `ToolExecutionLog`:
+  ```php
+  public function loggable(): MorphTo
+  {
+      return $this->morphTo();
+  }
+  ```
+- Pada masing-masing model agen khusus (`SecurityScanner`, `MalwareScanner`, `LogAnalyzer`):
+  ```php
+  public function toolExecutionLogs(): MorphMany
+  {
+      return $this->morphMany(ToolExecutionLog::class, 'loggable');
+  }
+  ```
+
+---
+
+### ⚡ Tantangan 2: Optimasi Kueri Riwayat Obrolan & Solusi N+1 (Challenge Nilai Plus A+)
+
+#### **Masalah N+1 Query pada Obrolan Bertingkat:**
+Jika riwayat percakapan dimuat tanpa eager loading, Laravel akan mengeksekusi:
+- 1 kueri untuk membaca `ChatSession`
+- + N kueri untuk membaca setiap `ChatMessage`
+- + M kueri untuk membaca setiap `ToolExecutionLog`
+- + K kueri untuk membaca setiap entitas agen polimorfik (`loggable`)
+Hal ini menyebabkan lonjakan **25 hingga 50+ kueri SQL** pada satu sesi percakapan sederhana.
+
+#### **Solusi Teroptimasi: Nested Eager Loading (`with()`)**
+Pada `ChatSessionController`, kueri dioptimasi menggunakan eager loading bertingkat:
+```php
+$chatSession = ChatSession::with([
+    'user',
+    'chatMessages' => function ($query) {
+        $query->orderBy('sequence_number', 'asc')->orderBy('created_at', 'asc');
+    },
+    'chatMessages.toolExecutionLogs.loggable', // Nested Eager Loading Bertingkat Polimorfik
+])->findOrFail($id);
+```
+
+#### **Hasil Benchmark & Bukti Bebas N+1:**
+Aplikasi menyediakan tombol switch langsung pada antarmuka `/chat/{id}` untuk membuktikan efisiensi:
+
+| Parameter Pengujian | Mode Tanpa Optimasi (Lazy Loading N+1) | Mode Teroptimasi (Nested Eager Loading) | Peningkatan Performa |
+|---|---|---|---|
+| **Jumlah Kueri SQL** | **25 – 48 Kueri** (Bertambah linier dengan data) | **5 – 6 Kueri Konstan** | **Pengurangan Kueri > 85%** |
+| **Waktu Eksekusi Kueri** | 18.5 – 34.0 ms | **1.8 – 3.2 ms** | **10x Lebih Cepat** |
+| **Beban Latensi Jaringan DB** | Sangat tinggi (*round-trip overhead*) | Minimal & Terkelompok | Sangat Efisien |
+| **Bukti Laravel Debugbar** | Kueri berulang berwarna merah/kuning | Kueri bersih, 0 duplikat | **100% Bebas N+1** |
+
+> **Catatan Verifikasi:** Laravel Debugbar telah terpasang dan aktif. Saat membuka rute `/chat/{id}`, tab **Queries** pada Laravel Debugbar membuktikan seluruh pohon relasi dimuat hanya dalam ~5-6 kueri SQL konstan.
+
+---
+
+### 🧩 Fitur agentic tambahan (sesuai rancangan awal)
+
+| Rancangan | Yang terjadi di aplikasi |
+|---|---|
+| Progres langsung | Saat agen bekerja, setiap langkah muncul di bawah kotak pesan: memilih tool, scope diverifikasi, necessity gate, keputusan policy, provider berjalan, cross-check. |
+| Policy "ask" → persetujuan | Langkah berisiko (mis. memanggil server MCP pihak ketiga) dilewati dulu, lalu muncul tombol **Approve and run again / Decline**. |
+| Context resolver | Jika target belum jelas ("Scan the web server."), harness menampilkan form pilihan target dari scope bertanda tangan, model tidak menebak. |
+| Bukti, bukan tebakan LLM | Setiap hasil tool disimpan sebagai *evidence artifact* (SHA-256). Jawaban diperiksa otomatis: CVE id, skor CVSS, run id, klaim "exploited in the wild". |
+| MCP + skill baru | `mcp_servers/asset_inventory.py` (server MCP sungguhan) + skill `version_check`: membandingkan versi hasil scan dengan inventaris aset. Contoh: inventaris bilang Tomcat 9.0.31, scan melihat 9.0.30 → *conflict*. |
+
+Coba di chat: *"Was Tomcat on lab-web-01 really patched? Check against the asset inventory."* lalu klik **Approve**, dan *"Scan the web server."*
+
+---
+
+### 🚀 Cara Menjalankan Aplikasi (Laravel + Harness + LLM)
+
+#### Cara cepat (disarankan untuk anggota kelompok)
+
+Prasyarat: **Python 3.12+, PHP 8.3+ (bukan 8.2 bawaan XAMPP), Composer, Node.js**. PHP 8.4 paling mudah dipasang
+lewat <https://php.new>. Lalu, dari folder proyek:
+
+```bash
+python scripts/setup.py          # Windows: python scripts\setup.py
+```
+
+Skrip ini memeriksa semua prasyarat (dan memberi tahu persis apa yang kurang), membuat `.venv`, memasang harness,
+membuat dan menandatangani scope lab, menjalankan `composer install`, membuat `.env`, kunci aplikasi, database +
+akun demo, `npm install`/`npm run build`, dan mengunduh bundel sertifikat CA jika PHP-mu tidak punya
+(error `cURL error 60`), sehingga **tidak perlu mengubah `php.ini`**. Setelah selesai:
+
+1. Isi `LLM_API_KEY` di `.env` (minta key kelompok; contoh Groq gratis ada di `.env.example`).
+2. `php artisan serve`, buka <http://127.0.0.1:8000>, login `test@example.com` / `password`.
+
+`python scripts/setup.py --check` hanya memeriksa tanpa mengubah apa pun. Skrip aman diulang.
+
+#### Cara manual (langkah per langkah)
+
+```bash
+# 1. Dependensi PHP & JS
+composer install
+npm install
+
+# 2. Harness Python (dipanggil oleh agen chat sebagai subprocess)
+python -m venv .venv
+.venv\Scripts\activate            # Windows  (Linux/macOS: source .venv/bin/activate)
+python -m pip install -e ".[dev]"
+python -m scripts.gen_scope_keypair --skip-if-exists
+python -m scripts.sign_lab_scope    # membuat scope lab yang ditandatangani
+
+# 3. Environment: isi LLM_API_KEY dengan key gateway LLM ITS kelompok (JANGAN di-commit)
+cp .env.example .env
+php artisan key:generate
+
+# 4. Database: akun + pemilik alat polimorfik
+php artisan migrate:fresh --seed
+#    (opsional) data contoh Pertemuan 9 untuk demo N+1:
+php artisan db:seed --class=Week9DemoSeeder
+
+# 5. Frontend & server
+npm run build
+php artisan serve
+```
+
+Akses di browser:
+- **Percakapan dengan agen:** `http://127.0.0.1:8000/chat`
+- **Investigation workspace** (dashboard harness: overview, findings, evidence, trace playback, activity log, report): `http://127.0.0.1:8000/investigations`
+- **Akun Operator Demo:** Email: `test@example.com` | Password: `password`
+
+> Jika jawaban agen berisi *"The language model could not be reached"*, cek `LLM_API_KEY` di `.env` dan pastikan laptop bisa mengakses `senopati.its.ac.id` (mungkin perlu jaringan/VPN ITS).
+
+---
+
+### 🧪 Verifikasi Pengujian Otomatis (PHPUnit & PSR-12)
+
+```bash
+# Jalankan seluruh unit & feature test (Relasi, Cascade, Polymorphic, & Eager Loading)
+php artisan test
+
+# Hasil pengujian:
+# 53 passed (LLM, NVD, dan harness dipalsukan dengan Http::fake / Process::fake)
+
+# Verifikasi kepatuhan gaya penulisan PSR-12 via Laravel Pint
+php vendor/bin/pint --test
+# {"tool":"pint","result":"passed"}
+```
+
+---
 
 ### v1.1: closing the audited gaps
 
@@ -65,6 +412,35 @@ line. The carried-forward defects, with their reasons, are listed in
 [docs/dev/IMPLEMENTATION.md](docs/dev/IMPLEMENTATION.md).
 
 ## Running it
+
+### Local browser dashboard
+
+After installing from source, start the dashboard from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m harness.dashboard
+```
+
+Open http://127.0.0.1:8765. On Linux/macOS use `.venv/bin/python -m harness.dashboard`.
+The dashboard reads `runs/` and lets you switch investigations, filter findings, inspect
+supporting observations and activity, and read or download the original Markdown report.
+Use Refresh records after running another investigation in the CLI. An empty workspace
+shows a getting-started message. Stop the server with Ctrl+C.
+
+It binds to loopback and only reads records; it does not launch investigations or expose signing
+keys. Use `--port 8766` to choose another port or `--runs <directory>` to view another run collection.
+Frontend files live in `src/harness/web/`: `index.html`, `style.css`, and `app.js`.
+Edit and refresh the browser to see changes; no frontend build or Node installation is required.
+
+The dashboard is branded **AEGIS — Agentic Security Investigation System**. Appearance supports
+Light, Dark, and System modes; a browser-local preference remembers the selection. Overview
+separates confirmed and possible findings, charts severity counts, and derives milestones from
+the first matching recorded events. Missing stages are labelled as not recorded.
+
+Investigation trace provides recorded playback with play/pause, next-event, reset, speed, and
+scrubbing controls. It never executes tools. Original event timestamps are retained; playback
+spacing is clamped to 0.35–3 seconds at 1× for readability, rather than representing execution
+duration. Run frontend checks with `node --test tests/dashboard_frontend.cjs`.
 
 For a first installation and a complete deterministic investigation on Linux, macOS or Windows,
 follow the [Quick start](docs/QUICKSTART.md). The shorter reference commands below assume the
@@ -154,6 +530,7 @@ than failing the run, and the deterministic fixture-backed provider answers the 
 | [06-implementation-roadmap.md](docs/design/06-implementation-roadmap.md) | Vertical slice, milestones, week-by-week plan |
 | [07-evaluation-plan.md](docs/design/07-evaluation-plan.md) | Lab targets, ground truth, metrics, ablations, injections |
 | [08-local-first-memory-and-routing.md](docs/design/08-local-first-memory-and-routing.md) | Local model contract, memory lifecycle, multi-provider necessity gate, v2 token optimizer |
+| [09-agentic-chat.md](docs/design/09-agentic-chat.md) | Laravel chat agent: LLM tool loop over the harness, findings archive and NVD; trust boundaries |
 | [decisions.md](docs/design/decisions.md) | ADR log — numbered decisions with status |
 
 ## Headline decisions
@@ -204,4 +581,15 @@ lab/                      docker-compose targets on an internal, egress-free net
 eval/                     scenarios, ground truth, metrics, runner
 scripts/                  scope keypair generation and signing
 tests/                    unit, contract, scenario and end-to-end tests, plus fixtures
+
+# Laravel Relational Platform Architecture (Week 9 PBKK)
+app/                      Laravel application core (Models, Controllers)
+  Http/Controllers/       ChatSessionController (Nested Eager Loading, N+1 Optimization)
+  Models/                 User, ChatSession, ChatMessage, ToolExecutionLog, SecurityScanner, MalwareScanner, LogAnalyzer
+database/
+  migrations/             Relational migrations with foreign key constraints & onDelete('cascade')
+  factories/              Model factories for dummy relational data generation
+  seeders/                DatabaseSeeder for Kelompok 6 members & realistic security investigations
+resources/views/
+  chat/                   Chat sessions index & show with live query benchmark analyzer
 ```

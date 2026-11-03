@@ -233,3 +233,26 @@ def safe_relpath(root: Path, candidate: Path) -> Path:
     if root != resolved and root not in resolved.parents:
         raise ValueError(f"path {resolved} escapes root {root}")
     return resolved
+
+
+def iter_nonempty_lines(data: bytes) -> list[tuple[bytes, int, int]]:
+    """Split ``data`` on newlines and return ``(line, start, end)`` byte offsets for every
+    non-blank line, so a parser can cite the exact evidence span it read."""
+    out: list[tuple[bytes, int, int]] = []
+    offset = 0
+    for raw in data.split(b"\n"):
+        start = offset
+        end = offset + len(raw)
+        if raw.strip():
+            out.append((raw, start, end))
+        offset = end + 1
+    return out
+
+
+#: Reference prefixes that point at memory. Memory is context and can never stand where evidence
+#: is required, so both the finding validator and the provenance verifier reject these.
+MEMORY_REFERENCE_PREFIXES = ("mem-", "memory:")
+
+
+def looks_like_memory(reference: object) -> bool:
+    return isinstance(reference, str) and reference.startswith(MEMORY_REFERENCE_PREFIXES)

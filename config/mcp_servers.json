@@ -1,0 +1,12 @@
+{
+  "servers": [
+    {
+      "id": "mcp:asset-inventory",
+      "description": "Asset inventory (CMDB) served over MCP: what should be installed on each lab machine.",
+      "command": ["python", "mcp_servers/asset_inventory.py"],
+      "capabilities": {"service.enumerate": "inventory_services"},
+      "risk": "MEDIUM",
+      "trust_class": "local_mcp"
+    }
+  ]
+}

@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from harness.models import EvidenceGap, EvidenceRef, Observation, ProviderExecution, TrustClass
 from harness.parsers.registry import ParseContext, ParseResult
-from harness.util import new_id, out_of_scope_ips
+from harness.util import iter_nonempty_lines, new_id, out_of_scope_ips
 
 AUTHLOG_MEDIA_TYPE = "text/x-authlog"
 PARSER_NAME = "auth_log"
@@ -163,7 +163,7 @@ def parse_auth_log(
 
 def _extract_events(data: bytes) -> list[_Event]:
     out: list[_Event] = []
-    for line, start, end in _iter_lines(data):
+    for line, start, end in iter_nonempty_lines(data):
         text = line.decode("utf-8", errors="replace")
         match = _SYSDLOG.match(text.strip())
         if not match:
@@ -258,15 +258,3 @@ def _timestamp(match: re.Match[str]) -> datetime | None:
         return datetime(year, month, int(match.group("day")), hour, minute, second, tzinfo=UTC)
     except ValueError:
         return None
-
-
-def _iter_lines(data: bytes) -> list[tuple[bytes, int, int]]:
-    out: list[tuple[bytes, int, int]] = []
-    offset = 0
-    for raw in data.split(b"\n"):
-        start = offset
-        end = offset + len(raw)
-        if raw.strip():
-            out.append((raw, start, end))
-        offset = end + 1
-    return out

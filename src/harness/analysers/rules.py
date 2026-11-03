@@ -18,7 +18,7 @@ Two rule shapes exist, because the interesting detections are of two kinds:
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 from harness.models import Claim, Observation
 from harness.util import new_id
@@ -167,8 +167,6 @@ class RuleEngine:
         self._rules = [dict(rule) for rule in (rules if rules is not None else DEFAULT_RULES)]
         self.skipped: list[tuple[str, str]] = []
 
-    def rule_ids(self) -> list[str]:
-        return [str(rule.get("id", "")) for rule in self._rules]
 
     def evaluate(self, observations: Sequence[Observation]) -> list[Claim]:
         claims: list[Claim] = []
@@ -253,10 +251,3 @@ class RuleEngine:
             confidence_basis=str(rule.get("confidence_basis", "")),
             caveats=list(rule.get("caveats") or []),
         )
-
-
-def claims_by_rule(claims: Iterable[Claim]) -> dict[str, list[Claim]]:
-    out: dict[str, list[Claim]] = {}
-    for claim in claims:
-        out.setdefault(claim.rule_id or "unattributed", []).append(claim)
-    return out

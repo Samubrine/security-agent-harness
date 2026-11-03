@@ -1,0 +1,22 @@
+name: version_check
+version: 0.1.0
+description: Cross-check the software versions the network scan sees against the asset inventory (an MCP server), so a version-based finding rests on two independent sources or shows where they disagree.
+inputs:
+  target:
+    type: scope_target
+    required: true
+capabilities:
+  - service.enumerate
+  - vulnerability.match
+completion_criteria:
+  - Every service version on the target is reported by two independent providers, or the missing second source is recorded as a gap.
+  - Where the scan and the inventory disagree about a version, the disagreement is recorded as a conflict and not resolved by picking one.
+  - Candidate CVEs are matched only against versions that were actually observed by a provider in this run.
+verification:
+  max_providers_per_need: 2
+  independent_for:
+    - version_check.service_versions
+allow_second_provider_by_default: true
+budget_override:
+  max_steps: 12
+  max_provider_calls: 8

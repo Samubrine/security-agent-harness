@@ -194,9 +194,11 @@ class NecessityGate:
             # ceiling. Selecting a fixed two made `max_providers_per_need > 2` an inert field
             # (R2-30): a skill could not ask for three-way verification even though the model
             # and the hard ceiling both allow it.
-            selected = [spec.id for spec in viable[:limit]]
-            for spec in viable[limit:]:
-                rejected.setdefault(spec.id, f"beyond the {reason_kind} selection")
+            picked = self._diverse(viable, limit) if reason_kind == "trust_diversity" else list(viable[:limit])
+            selected = [spec.id for spec in picked]
+            for spec in viable:
+                if spec.id not in selected:
+                    rejected.setdefault(spec.id, f"beyond the {reason_kind} selection")
             return self._budget_checked(
                 selected=selected,
                 expansion_reason=reason_kind,  # type: ignore[arg-type]
@@ -302,6 +304,29 @@ class NecessityGate:
             if not present.get(kind):
                 return None
         return sorted({obs_id for kind in required for obs_id in present[kind]})
+
+    @staticmethod
+    def _diverse(viable: Sequence[ProviderSpec], limit: int) -> list[ProviderSpec]:
+        """Pick ``limit`` providers for a conclusion that must not rest on one source.
+
+        "Independent" has to mean something: two native tools from the same machine reading the same
+        wire are one source counted twice. So after the best-ranked provider, each further pick goes
+        to the best-ranked provider of a trust class not yet chosen, and only when every class is
+        represented does ranking alone decide. With a single trust class available this is exactly
+        the plain ranked selection.
+        """
+        picked: list[ProviderSpec] = []
+        for spec in viable:
+            if len(picked) >= limit:
+                break
+            if not picked or spec.trust_class not in {p.trust_class for p in picked}:
+                picked.append(spec)
+        for spec in viable:
+            if len(picked) >= limit:
+                break
+            if spec not in picked:
+                picked.append(spec)
+        return picked
 
     def _rank(
         self,

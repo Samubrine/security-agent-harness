@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pytest
 
-from harness.models import Budget, Correlation, ModelMetadata, Observation, ProviderSpec, SkillSpec, SkillVerification
+from harness.models import Budget, Correlation, Observation, ProviderSpec, SkillSpec, SkillVerification
 from harness.providers.base import ProviderResult
 from harness.providers.necessity import CAPABILITY_OUTPUT_KINDS, NecessityGate, cache_key, output_kinds
 from harness.providers.registry import ProviderRegistry

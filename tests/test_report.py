@@ -18,7 +18,7 @@ from harness.models import (
     RunConfig,
 )
 from harness.report.build import build_report, severity_for, write_report
-from harness.util import append_jsonl, atomic_write_json, new_id, utcnow
+from harness.util import append_jsonl, atomic_write_json, utcnow
 
 
 def _build_run_dir(tmp_path: Path) -> Path:

@@ -263,7 +263,6 @@ def _unparsable_provider(trust_class: str):
     harness has no reader for. Whether the run survives it depends on who produced the bytes, which is
     the distinction these two tests pin.
     """
-    from harness.providers.base import ProviderResult
 
     @dataclass
     class _Provider:

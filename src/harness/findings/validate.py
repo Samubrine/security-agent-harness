@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
 from harness.models import Finding, Observation
+from harness.util import looks_like_memory
 
 #: The parser whose observations may carry a CVE match. The harness selects a parser from the
 #: response's media type, so a provider payload cannot claim it - which is what makes this an
@@ -66,7 +67,7 @@ def validate_finding(
             )
         for observation_id in claim.supports:
             cited.append(observation_id)
-            if _looks_like_memory(observation_id):
+            if looks_like_memory(observation_id):
                 violations.append(
                     f"claim {claim.id} cites {observation_id!r}, which is a memory reference; "
                     "memory is context and can never be finding evidence"
@@ -124,10 +125,6 @@ def validate_all(
 
 
 # -- helpers ----------------------------------------------------------------------------
-
-
-def _looks_like_memory(reference: str) -> bool:
-    return reference.startswith("mem-") or reference.startswith("memory:")
 
 
 def _verifies(store: object, ref: object) -> bool:
