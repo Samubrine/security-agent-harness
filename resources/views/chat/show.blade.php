@@ -16,20 +16,21 @@
 
     <div class="page-heading">
         <div>
-            <p class="eyebrow">AEGIS / CONVERSATION</p>
+            <p class="eyebrow">Conversation</p>
             <h1>{{ $chatSession->title }}</h1>
-            <p class="subtitle">{{ $modeLabels[$chatSession->agent_mode] ?? $chatSession->agent_mode }} · started {{ $chatSession->created_at->format('d M Y, H:i') }} · {{ ucfirst($chatSession->status) }}</p>
+            <p class="subtitle" style="font-size:14px;color:var(--text-muted)">{{ $modeLabels[$chatSession->agent_mode] ?? $chatSession->agent_mode }} · started {{ $chatSession->created_at->format('d M Y, H:i') }} · {{ ucfirst($chatSession->status) }}</p>
         </div>
         <div class="actions">
-            <a class="button" href="{{ route('chat.index') }}">← All conversations</a>
-            <a class="button" href="{{ route('investigations.index') }}">Investigation workspace ↗</a>
+            <a class="button" href="{{ route('chat.index') }}">All conversations</a>
+            <a class="button" href="{{ route('investigations.index') }}">Investigation workspace</a>
         </div>
     </div>
 
     <div x-data="agentChat">
-    <section class="panel content">
+    <section class="panel" aria-label="Conversation">
+        <div class="thread">
         <div class="conversation">
-            @foreach ($messages as $msg)
+            @forelse ($messages as $msg)
                 @if ($msg->role === 'system')
                     <div class="msg-system" @if($msg->id === $lastId) id="latest" @endif>{{ $msg->content }}</div>
                 @elseif ($msg->role === 'user')
@@ -38,17 +39,17 @@
                         <div class="msg-text">{{ $msg->content }}</div>
                     </div>
                 @else
-                    <article class="msg-agent" @if($msg->id === $lastId) id="latest" @endif>
+                    <article class="msg-agent" @if($msg->id === $lastId) id="latest" tabindex="-1" @endif aria-label="Agent answer">
                         <div class="msg-meta">
-                            <strong style="color:var(--text)">AEGIS agent</strong>
+                            <strong>AEGIS</strong>
                             <span>{{ $msg->created_at->format('H:i') }}</span>
-                            <span>· {{ number_format($msg->token_count) }} tokens</span>
-                            @if ($msg->toolExecutionLogs->isNotEmpty())<span>· {{ $msg->toolExecutionLogs->count() }} tool {{ \Illuminate\Support\Str::plural('call', $msg->toolExecutionLogs->count()) }}</span>@endif
+                            <span class="badge">{{ number_format($msg->token_count) }} tokens</span>
+                            @if ($msg->toolExecutionLogs->isNotEmpty())<span class="badge">{{ $msg->toolExecutionLogs->count() }} tool {{ \Illuminate\Support\Str::plural('call', $msg->toolExecutionLogs->count()) }}</span>@endif
                         </div>
 
                         @if ($msg->toolExecutionLogs->isNotEmpty())
                             <div class="steps">
-                                <div class="steps-title"><span>WHAT THE AGENT DID</span><span>tool_execution_logs</span></div>
+                                <div class="steps-title"><span>What the agent did</span><span>tool_execution_logs</span></div>
                                 @foreach ($msg->toolExecutionLogs->sortBy('id') as $toolLog)
                                     @include('chat.partials.tool-log', ['toolLog' => $toolLog])
                                 @endforeach
@@ -57,7 +58,7 @@
 
                         @if ($msg->reasoning)
                             <details class="reasoning">
-                                <summary>Show the model's reasoning</summary>
+                                <summary>Show reasoning</summary>
                                 <div class="rendered-report">{!! $md($msg->reasoning) !!}</div>
                             </details>
                         @endif
@@ -70,16 +71,25 @@
                         @endif
                     </article>
                 @endif
-            @endforeach
+            @empty
+                <div class="empty">
+                    <span class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg></span>
+                    <strong>Ask your first question</strong>
+                    <p>Try one of the suggestions below, or describe what you want checked in your own words.</p>
+                </div>
+            @endforelse
+        </div>
         </div>
     </section>
 
-    <section class="panel composer">
-        @error('content')<p class="field-error" style="margin:0 0 10px">{{ $message }}</p>@enderror
-        @if (session('error'))<p class="field-error" style="margin:0 0 10px">{{ session('error') }}</p>@endif
-        <div class="live" x-ref="live" x-show="busy || error" x-cloak aria-live="polite">
-            <div class="working" x-show="busy"><span class="spinner"></span> The agent is working. Each step appears here as it happens.</div>
-            <ol class="live-steps">
+    <section class="composer" aria-label="Message the agent">
+      <div class="composer-inner">
+        <div class="live" x-ref="live" x-show="busy || error" x-cloak x-transition.opacity.duration.150ms>
+            <div class="live-head">
+                <span class="live-chip" x-show="busy"><i aria-hidden="true"></i>Live</span>
+                <span class="working" x-show="busy" x-text="status">The agent is working.</span>
+            </div>
+            <ol class="live-steps" aria-live="polite" aria-label="Agent progress">
                 <template x-for="(s, i) in steps" :key="i">
                     <li class="live-step" :class="[s.kind, s.state]">
                         <span class="live-dot" aria-hidden="true"></span>
@@ -88,11 +98,12 @@
                     </li>
                 </template>
             </ol>
-            <p class="field-error" x-show="error" x-text="error"></p>
+            <p class="field-error" role="alert" x-show="error"><span x-text="error"></span> <button type="button" class="button small" @click="retry()">Try again</button></p>
         </div>
-        <form method="POST" action="{{ route('chat.message', $chatSession->id) }}" @submit.prevent="run($el)">
+        @error('content')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+        <form method="POST" action="{{ route('chat.message', $chatSession->id) }}" @submit.prevent="run($el)" novalidate>
             @csrf
-            <div class="chips" x-show="!busy">
+            <div class="chips" x-show="!busy" aria-label="Suggested questions">
                 @foreach ([
                     'Is lab-web-01 safe? Check it and explain the most serious risks.',
                     'Was Tomcat on lab-web-01 really patched? Check against the asset inventory.',
@@ -100,27 +111,29 @@
                     'Analyse lab-logs. Did someone break in?',
                     'What have we found so far?',
                 ] as $prompt)
-                    <button type="button" class="button small" @click="$refs.input.value = @js($prompt); $refs.input.focus()">{{ $prompt }}</button>
+                    <button type="button" class="button small" @click="$refs.input.value = @js($prompt); invalid = false; $refs.input.focus()">{{ $prompt }}</button>
                 @endforeach
             </div>
-            <div class="form-row">
-                <div style="flex:1">
-                    <label class="small-label field-label" for="messageInput">MESSAGE</label>
-                    <textarea id="messageInput" x-ref="input" class="field" name="content" rows="2" required maxlength="4000" :readonly="busy"
-                        placeholder="Ask the agent, e.g. “Apakah lab-web-01 aman?”"
-                        @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); run($el.form) }">{{ old('content') }}</textarea>
-                </div>
-                <button type="submit" class="button primary" :disabled="busy"><span x-text="busy ? 'Working…' : 'Send'">Send</span></button>
+            <label class="sr-only" for="messageInput">Message</label>
+            <div class="compose-box" :class="{ invalid }">
+                <textarea id="messageInput" x-ref="input" name="content" rows="1" required maxlength="4000" :readonly="busy"
+                    :aria-invalid="invalid" aria-describedby="composer-help"
+                    placeholder="Ask the agent, e.g. “Apakah lab-web-01 aman?”"
+                    @input="invalid = false; $el.style.height = 'auto'; $el.style.height = Math.min($el.scrollHeight, 180) + 'px'"
+                    @keydown.enter="if (!$event.shiftKey && !$event.isComposing) { $event.preventDefault(); run($el.form) }">{{ old('content') }}</textarea>
+                <button type="submit" class="button primary" :class="{ 'is-loading': busy, 'is-success': sent }" :disabled="busy"><span>Send</span></button>
             </div>
-            <p class="hint" style="margin-top:8px">Enter to send · Shift+Enter for a new line · Investigations only run against the signed lab scope.</p>
+            <p class="field-error" role="alert" x-show="invalid" x-cloak>Write a question first, at least two characters.</p>
+            <p class="hint" id="composer-help">Enter sends · Shift+Enter adds a line · Checks only run against the signed lab scope.</p>
         </form>
+      </div>
     </section>
     </div>
 
     {{-- Week 9 (relational modelling): eager loading vs N+1 on this page's own query. --}}
-    <details class="panel inspector" @if($mode === 'lazy') open @endif>
+    <details class="panel inspector acc" @if($mode === 'lazy') open @endif>
         <summary>
-            <span>Query inspector · Pertemuan 9 (eager loading vs N+1)</span>
+            <span>Query inspector · Pertemuan 9</span>
             <span class="hint" style="font-weight:400">{{ $queryCount }} queries · {{ $executionTimeMs }} ms</span>
         </summary>
         <div class="inspector-body">

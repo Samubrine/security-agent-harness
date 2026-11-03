@@ -1,6 +1,6 @@
 <section>
     <header>
-        <h2 class="panel-title" style="font-size:15px;font-weight:650;margin:0">
+        <h2 >
             {{ __('Update Password') }}
         </h2>
 
@@ -9,7 +9,7 @@
         </p>
     </header>
 
-    <form method="post" action="{{ route('password.update') }}" class="mt-6 space-y-6">
+    <form method="post" action="{{ route('password.update') }}" data-validate data-pending="Saving changes" class="mt-6 space-y-6">
         @csrf
         @method('put')
 

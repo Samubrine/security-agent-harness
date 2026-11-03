@@ -250,7 +250,7 @@ class AgenticGapsTest extends TestCase
             ->assertOk()
             ->assertSee('2 of 3 checkable facts match the evidence')
             ->assertSee('CVE-2099-0001')
-            ->assertSee('APPROVAL NEEDED')
+            ->assertSee('Approval needed')
             ->assertSee('Approve and run again')
             ->assertSee('the asset inventory (MCP server)');
     }

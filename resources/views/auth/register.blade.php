@@ -1,5 +1,9 @@
 <x-guest-layout>
-    <form method="POST" action="{{ route('register') }}">
+    <x-slot name="title">Create your account</x-slot>
+    <x-slot name="heading">Create your account</x-slot>
+    <x-slot name="lead">Accounts are private. Conversations and runs stay with you.</x-slot>
+
+    <form method="POST" action="{{ route('register') }}" data-validate data-pending="Creating account">
         @csrf
 
         <!-- Name -->
@@ -21,8 +25,8 @@
             <x-input-label for="password" :value="__('Password')" />
 
             <x-text-input id="password" class="block mt-1 w-full"
-                            type="password"
-                            name="password"
+                            type="password" data-reveal-toggle
+                            name="password" minlength="8"
                             required autocomplete="new-password" />
 
             <x-input-error :messages="$errors->get('password')" class="mt-2" />
@@ -33,7 +37,7 @@
             <x-input-label for="password_confirmation" :value="__('Confirm Password')" />
 
             <x-text-input id="password_confirmation" class="block mt-1 w-full"
-                            type="password"
+                            type="password" data-matches="password"
                             name="password_confirmation" required autocomplete="new-password" />
 
             <x-input-error :messages="$errors->get('password_confirmation')" class="mt-2" />

@@ -1,8 +1,12 @@
 <x-guest-layout>
+    <x-slot name="title">Sign in to AEGIS</x-slot>
+    <x-slot name="heading">Sign in to AEGIS</x-slot>
+    <x-slot name="lead">Pick up your investigations and conversations where you left them.</x-slot>
+
     <!-- Session Status -->
     <x-auth-session-status class="mb-4" :status="session('status')" />
 
-    <form method="POST" action="{{ route('login') }}">
+    <form method="POST" action="{{ route('login') }}" data-validate data-pending="Signing in">
         @csrf
 
         <!-- Email Address -->
@@ -17,7 +21,7 @@
             <x-input-label for="password" :value="__('Password')" />
 
             <x-text-input id="password" class="block mt-1 w-full"
-                            type="password"
+                            type="password" data-reveal-toggle
                             name="password"
                             required autocomplete="current-password" />
 

@@ -1,6 +1,6 @@
 <section>
     <header>
-        <h2 class="panel-title" style="font-size:15px;font-weight:650;margin:0">
+        <h2 >
             {{ __('Profile Information') }}
         </h2>
 
@@ -13,7 +13,7 @@
         @csrf
     </form>
 
-    <form method="post" action="{{ route('profile.update') }}" class="mt-6 space-y-6">
+    <form method="post" action="{{ route('profile.update') }}" data-validate data-pending="Saving changes" class="mt-6 space-y-6">
         @csrf
         @method('patch')
 
