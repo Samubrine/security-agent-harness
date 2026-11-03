@@ -8,10 +8,22 @@ const root = document.getElementById('workspace');
 const params = new URLSearchParams(location.search);
 let data, view = ['overview','findings','evidence','trace','activity','report'].includes(params.get('view')) ? params.get('view') : 'overview', loadId = 0;
 let wantedRun = params.get('run');
+let lastTrigger = null;
 let traceCursor = 0, traceTimer = null, traceSpeed = 1;
 const nice = value => String(value ?? '').replaceAll('_',' ').replaceAll('.', ' · ');
 const date = value => value ? new Date(value).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}) : 'Not recorded';
-const empty = text => `<div class="empty">${escape(text)}</div>`;
+const icon = name => `<svg class="icon" aria-hidden="true"><use href="#${name}"/></svg>`;
+const empty = (text, title = '', action = '') => `<div class="empty">${title ? `<span class="empty-icon">${icon('i-shield')}</span><strong>${escape(title)}</strong>` : ''}<p>${escape(text)}</p>${action}</div>`;
+const skeleton = () => `<div class="sk-stats" aria-hidden="true">${'<div><span class="skeleton" style="width:56px;height:34px"></span><span class="skeleton" style="width:96px;height:12px"></span></div>'.repeat(4)}</div><div class="sk-rows" aria-hidden="true">${'<span class="skeleton" style="height:56px"></span>'.repeat(4)}</div>`;
+const setBusy = on => { $('#content').setAttribute('aria-busy', on ? 'true' : 'false'); };
+function showError(text, retry) {
+  const box = $('#message');
+  box.className = 'err';
+  box.innerHTML = `<span>${escape(text)}</span><button class="button small" type="button" id="retry">Try again</button>`;
+  $('#retry').addEventListener('click', retry);
+  window.aegis?.announce(text);
+}
+function clearMessage() { const box = $('#message'); box.className = ''; box.textContent = ''; }
 const panel = (title, subtitle, body, action='') => `<section class="panel"><div class="panel-header"><div><h2>${escape(title)}</h2>${subtitle ? `<p>${escape(subtitle)}</p>` : ''}</div>${action}</div>${body}</section>`;
 // Render the report's Markdown vocabulary; raw HTML stays escaped.
 function markdownInline(source) {
@@ -86,13 +98,17 @@ function renderMarkdown(source) {
 }
 async function request(url) {
   const response = await fetch(url);
-  if (!response.ok) throw new Error('Could not load investigation records. Check the server and refresh.');
+  if (!response.ok) throw new Error('Could not load the investigation records. Check that the server is running, then try again.');
   return response.json();
 }
-async function loadRuns() {
+async function loadRuns(event) {
+  const manual = event instanceof Event;
   pauseTrace();
   $('#refresh').disabled = true;
-  $('#message').textContent = '';
+  window.aegis?.pending($('#refresh'), true, 'Refreshing records');
+  clearMessage();
+  if (!data) { $('#content').innerHTML = skeleton(); setBusy(true); }
+  let ok = false;
   try {
     const previous = $('#run-select').value;
     const runs = await request(root.dataset.runsUrl);
@@ -103,32 +119,42 @@ async function loadRuns() {
     if (!runs.length) {
       data = null;
       $('#run-status').textContent = 'No records';
-      $('#content').innerHTML = panel('Your workspace is ready', '', empty('Start an investigation above, or ask the agent in Conversations. Its findings appear here.'));
+      $('#content').innerHTML = panel('Your workspace is ready', '', empty('Run a first investigation, or ask the agent in Conversations. Its findings appear here.', 'No investigations yet', '<a class="button primary" href="?new=1#new-run">Run an investigation</a>'));
+      setBusy(false);
+      ok = true;
       return;
     }
     await loadRun();
-  } catch (error) { $('#message').textContent = error.message; }
-  finally { $('#refresh').disabled = false; }
+    ok = true;
+  } catch (error) { setBusy(false); $('#content').replaceChildren(); showError(error.message, loadRuns); }
+  finally {
+    window.aegis?.pending($('#refresh'), false);
+    $('#refresh').disabled = false;
+    if (ok && manual) window.aegis?.toast('Records refreshed.');
+  }
 }
 async function loadRun() {
   pauseTrace();
   traceCursor = 0;
   const current = ++loadId;
-  $('#message').textContent = 'Loading investigation…';
+  clearMessage();
   data = null;
-  $('#content').replaceChildren();
+  $('#content').innerHTML = skeleton();
+  setBusy(true);
   try {
     const result = await request(root.dataset.runUrl.replace('__RUN__', encodeURIComponent($('#run-select').value)));
     if (current !== loadId) return;
     data = result;
     traceCursor = view === 'trace' ? 0 : data.events.length;
-    $('#message').textContent = '';
     $('#run-status').textContent = data.run.status || 'Unknown';
+    $('#run-status').className = 'badge ' + (/complet|ok|success/i.test(data.run.status || '') ? 'ok' : /fail|error/i.test(data.run.status || '') ? 'bad' : '');
+    setBusy(false);
     render();
-  } catch (error) { if (current === loadId) $('#message').textContent = error.message; }
+  } catch (error) { if (current === loadId) { setBusy(false); $('#content').replaceChildren(); showError(error.message, loadRun); } }
 }
 function findingRows(findings) {
-  return findings.map(f => `<button class="finding-row" data-finding="${escape(f.id)}"><span class="severity-dot ${levels.includes(f.severity)?f.severity:'info'}"></span><span class="finding-info"><strong>${escape(f.title)}</strong><small>${escape(f.id)} &nbsp; · &nbsp; ${escape(f.status)} &nbsp; · &nbsp; ${(f.claims||[]).length} claims</small></span><span class="severity ${levels.includes(f.severity)?f.severity:'info'}">${escape(f.severity)}</span><span class="arrow">↗</span></button>`).join('') || empty('No findings match this view.');
+  if (!findings.length) return empty('Nothing matches. Clear the search or choose another severity.', 'No findings here');
+  return `<div class="rows">${findings.map(f => { const sev = levels.includes(f.severity)?f.severity:'info'; return `<button type="button" class="finding-row" data-finding="${escape(f.id)}"><span class="severity-dot ${sev}" aria-hidden="true"></span><span class="severity ${sev}">${escape(f.severity)}</span><span class="finding-info"><strong>${escape(f.title)}</strong><small>${escape(f.id)} · ${(f.claims||[]).length} claims</small></span><span class="chip-status ${f.status==='confirmed'?'':'muted'}">${f.status==='confirmed'?'Confirmed':f.status==='possible'?'Possible · needs checking':escape(f.status)}</span><span class="arrow" aria-hidden="true">→</span></button>`; }).join('')}</div>`;
 }
 function sortedFindings() {
   return [...data.findings].sort((a,b) => (levels.indexOf(a.severity)+1||99)-(levels.indexOf(b.severity)+1||99));
@@ -148,7 +174,8 @@ function render() {
   const titles = {overview:'Security investigation overview',findings:'Investigation findings',evidence:'Evidence records',trace:'Investigation trace',activity:'Activity log',report:'Investigation report'};
   $('#page-title').textContent = titles[view];
   $('#breadcrumb').textContent = view === 'activity' ? 'Activity log' : view[0].toUpperCase()+view.slice(1);
-  document.querySelectorAll('.nav').forEach(button => button.classList.toggle('active',button.dataset.view===view));
+  document.querySelectorAll('.nav[data-view]').forEach(button => { const on = button.dataset.view===view; button.classList.toggle('active',on); if (on) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); });
+  const content = $('#content'); content.classList.remove('swap'); void content.offsetWidth; content.classList.add('swap');
   const counts = Object.fromEntries(levels.map(level => [level,data.findings.filter(f=>f.severity===level).length]));
   if (view === 'overview') { renderOverview(counts); return; }
   if (view === 'trace') { renderTrace(); return; }
@@ -157,12 +184,12 @@ function render() {
     const filter = () => {const query = $('#search').value.toLowerCase();$('#finding-results').innerHTML = findingRows(sortedFindings().filter(f=>(!$('#severity').value || f.severity===$('#severity').value) && JSON.stringify(f).toLowerCase().includes(query)));};
     $('#search').addEventListener('input',filter);$('#severity').addEventListener('change',filter);filter();
   } else if (view === 'evidence') {
-    $('#content').innerHTML = panel('Evidence records',`${data.observations.length} observations · expand to inspect the recorded values and provenance.`,data.observations.map(o=>`<details class="record"><summary>${escape(nice(o.kind))} · ${escape(o.provider)}<br><span class="small-label">${escape(o.id)}</span></summary><pre>${escape(JSON.stringify(o,null,2))}</pre></details>`).join('') || empty('No evidence recorded.'));
+    $('#content').innerHTML = panel('Evidence records',`${data.observations.length} observations · expand to inspect the recorded values and provenance.`,(data.observations.length ? `<div class="records">${data.observations.map(o=>`<details class="record"><summary>${escape(nice(o.kind))} · ${escape(o.provider)}<br><span class="small-label">${escape(o.id)}</span></summary><pre>${escape(JSON.stringify(o,null,2))}</pre></details>`).join('')}</div>` : empty('This run recorded no evidence.', 'No evidence')));
   } else if (view === 'activity') {
     $('#content').innerHTML = panel('Activity log',`${data.events.length} recorded events · newest first.`,activities([...data.events].reverse()));
   } else {
-    $('#content').innerHTML = panel('Investigation report','Rendered investigation report.',`<article class="report rendered-report">${renderMarkdown(data.report)}</article>`,'<button class="button" id="download">Download .md ↓</button>');
-    $('#download').addEventListener('click',()=>{const url=URL.createObjectURL(new Blob([data.report],{type:'text/markdown'}));const a=document.createElement('a');a.href=url;a.download='investigation-report.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+    $('#content').innerHTML = panel('Investigation report','Rendered investigation report.',`<article class="report rendered-report">${renderMarkdown(data.report)}</article>`,'<button class="button" id="download" type="button">Download report</button>');
+    $('#download').addEventListener('click',()=>{const url=URL.createObjectURL(new Blob([data.report],{type:'text/markdown'}));const a=document.createElement('a');a.href=url;a.download='investigation-report.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);window.aegis?.toast('Report downloaded as investigation-report.md.');});
   }
 }
 function milestoneMarkup() {
@@ -181,8 +208,9 @@ function renderOverview(counts) {
   const stats = [['Total findings',data.findings.length,`${counts.critical} critical · ${counts.high} high`],['Confirmed / possible',`${confirmed} / ${possible}`,other ? `${other} with other statuses` : 'Finding confidence status'],['Evidence records',data.observations.length,'Recorded observations'],['Provider calls',data.run.summary?.provider_calls ?? '—',`${data.gaps.length} coverage gaps`]];
   const targets = [...new Set(data.events.flatMap(e => e.type === 'CONTEXT_RESOLVED' ? (e.data?.grants || []).map(g=>g.alias).filter(Boolean) : []))];
   const context = [['Target',targets.join(', ') || 'Not recorded'],['Scope',data.run.scope_id || 'Not recorded'],['Skill',nice(data.run.skill)],['Model',data.run.model?.model_id || 'Unknown'],['Authority',data.run.authority || 'Unknown'],['Started',date(data.run.summary?.started_at || data.run.created_at)],['Ended',date(data.run.summary?.ended_at)],['Status',data.run.status || 'Unknown']];
-  const chart = `<div class="distribution" role="img" aria-label="Findings by severity: ${escape(levels.map(l=>`${l} ${counts[l]}`).join(', '))}">${levels.map(l=>`<div class="chart-row ${l}"><span>${l}</span><meter min="0" max="${Math.max(1,...Object.values(counts))}" value="${counts[l]}" aria-label="${l}: ${counts[l]} findings"></meter><b>${counts[l]}</b></div>`).join('')}</div>`;
-  $('#content').innerHTML = `<div class="stats">${stats.map(([label,value,foot])=>`<section class="stat"><div class="stat-label">${label}</div><div class="stat-number">${value}</div><div class="stat-foot">${foot}</div></section>`).join('')}</div><div class="grid"><div>${panel('Investigation objective','',`<p class="objective">${escape(data.run.objective || 'Not recorded')}</p>`, '<button class="text-button" data-go="report">Read report ↗</button>')}${panel('Findings to review','Ordered by severity. Possible findings require further validation.',findingRows(sortedFindings()),'<button class="text-button" data-go="findings">All findings ↗</button>')}${panel('Investigation milestones','First recorded occurrence of each stage; elapsed time from run start.',milestoneMarkup(),'<button class="text-button" data-go="trace">Explore trace ↗</button>')}</div><div>${panel('Findings by severity','Counts for this investigation.',chart)}${panel('Run context','',`<div class="scope">${context.map(([label,value])=>`<div>${label}<b>${escape(value)}</b></div>`).join('')}</div>`)}</div></div>`;
+  const max = Math.max(1,...Object.values(counts));
+  const chart = `<div class="distribution" role="img" aria-label="Findings by severity: ${escape(levels.map(l=>`${l} ${counts[l]}`).join(', '))}">${levels.map((l,i)=>`<div class="chart-row ${l}"><span>${l}</span><span class="bar-track"><i class="bar-fill" style="width:${counts[l]/max*100}%;--i:${i}"></i></span><b>${counts[l]}</b></div>`).join('')}</div>`;
+  $('#content').innerHTML = `<div class="stats">${stats.map(([label,value,foot],i)=>`<section class="stat"><div class="stat-number${i===0&&counts.critical>0?' critical-text':''}">${value}</div><div class="stat-label">${label}</div><div class="stat-foot">${foot}</div></section>`).join('')}</div><div class="grid"><div>${panel('Investigation objective','',`<p class="objective">${escape(data.run.objective || 'Not recorded')}</p>`, '<button type="button" class="text-button" data-go="report">Read report</button>')}${panel('Findings to review','Ordered by severity. Possible findings require further validation.',findingRows(sortedFindings()),'<button type="button" class="text-button" data-go="findings">All findings</button>')}${panel('Investigation milestones','First recorded occurrence of each stage; elapsed time from run start.',milestoneMarkup(),'<button type="button" class="text-button" data-go="trace">Explore trace</button>')}</div><div>${panel('Findings by severity','Counts for this investigation.',chart)}${panel('Run context','',`<div class="scope">${context.map(([label,value])=>`<div>${label}<b>${escape(value)}</b></div>`).join('')}</div>`)}</div></div>`;
 }
 function pauseTrace() {
   if (traceTimer !== null) clearTimeout(traceTimer);
@@ -212,7 +240,7 @@ function scheduleTrace() {
   traceTimer = setTimeout(() => { traceTimer = null; traceCursor++; scheduleTrace(); updateTrace(); },delay);
 }
 function renderTrace() {
-  $('#content').innerHTML = panel('Recorded playback', 'Replay saved events for review. This does not execute tools or run a new investigation.',`<div class="playback-controls"><button class="button" id="trace-play">Play</button><button class="button" id="trace-next">Next event</button><button class="button" id="trace-reset">Reset</button><label for="trace-speed">Speed</label><select id="trace-speed"><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select><input id="trace-progress" type="range" min="0" max="${data.events.length}" value="${traceCursor}" aria-label="Revealed event count"></div><div id="trace-count" class="trace-state" role="status" aria-live="polite"></div><p class="trace-note">Original timestamps are preserved. Playback spacing is adjusted to 0.35–3 seconds per event at 1× for readability; it is not execution timing. Expand an event to inspect recorded decisions and references.</p><div id="trace-events" class="trace-list"></div>`);
+  $('#content').innerHTML = panel('Recorded playback', 'Replay saved events for review. This does not execute tools or run a new investigation.',`<div class="playback-controls"><button type="button" class="button" id="trace-play">Play</button><button type="button" class="button" id="trace-next">Next event</button><button type="button" class="button" id="trace-reset">Reset</button><label for="trace-speed">Speed</label><select id="trace-speed"><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select><input id="trace-progress" type="range" min="0" max="${data.events.length}" value="${traceCursor}" aria-label="Revealed event count"></div><div id="trace-count" class="trace-state" role="status" aria-live="polite"></div><p class="trace-note">Original timestamps are preserved. Playback spacing is adjusted to 0.35–3 seconds per event at 1× for readability; it is not execution timing. Expand an event to inspect recorded decisions and references.</p><div id="trace-events" class="trace-list"></div>`);
   $('#trace-speed').value = String(traceSpeed);
   $('#trace-play').addEventListener('click', () => {
     if (traceTimer !== null) pauseTrace();
@@ -233,10 +261,13 @@ document.addEventListener('click', event => {
   if (!finding) return;
   const ids=new Set((finding.claims||[]).flatMap(c=>c.supports||[]));
   const evidence=data.observations.filter(o=>ids.has(o.id));
-  $('#detail-content').innerHTML=`<h2 class="detail-title">${escape(finding.title)}</h2><p><span class="badge">${escape(finding.severity)}</span> <span class="badge">${escape(finding.status)}</span></p>${(finding.claims||[]).map(c=>`<div class="claim">${escape(c.statement)}<small>Confidence: ${escape(c.confidence)} · ${escape(c.confidence_basis)}</small></div>`).join('')}<h3>Supporting observations</h3>${evidence.map(o=>`<details class="record"><summary>${escape(o.id)} · ${escape(nice(o.kind))}</summary><pre>${escape(JSON.stringify(o,null,2))}</pre></details>`).join('') || '<p>No linked observations recorded.</p>'}`;
+  $('#detail-content').innerHTML=`<h2 class="detail-title">${escape(finding.title)}</h2><p><span class="severity ${levels.includes(finding.severity)?finding.severity:'info'}">● ${escape(finding.severity)}</span> &nbsp; <span class="badge ${finding.status==='confirmed'?'ok':''}">${escape(finding.status)}</span></p>${(finding.claims||[]).map(c=>`<div class="claim">${escape(c.statement)}<small>Confidence: ${escape(c.confidence)} · ${escape(c.confidence_basis)}</small></div>`).join('')}<h3>Supporting observations</h3>${evidence.map(o=>`<details class="record"><summary>${escape(o.id)} · ${escape(nice(o.kind))}</summary><pre>${escape(JSON.stringify(o,null,2))}</pre></details>`).join('') || '<p>No linked observations recorded.</p>'}`;
+  lastTrigger = target;
   $('#detail').showModal();
 });
 $('#close-detail').addEventListener('click',()=>$('#detail').close());
+$('#detail').addEventListener('click',e=>{ if (e.target === e.currentTarget) e.currentTarget.close(); });
+$('#detail').addEventListener('close',()=>{ lastTrigger?.focus?.({preventScroll:true}); });
 $('#refresh').addEventListener('click',loadRuns);
 $('#run-select').addEventListener('change',loadRun);
 loadRuns();

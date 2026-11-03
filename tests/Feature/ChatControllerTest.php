@@ -21,7 +21,7 @@ class ChatControllerTest extends TestCase
         $response = $this->actingAs($user)->get(route('chat.index'));
 
         $response->assertStatus(200);
-        $response->assertSee('Agentic AI Chat Sessions');
+        $response->assertSee('Is your lab safe?');
     }
 
     public function test_authenticated_user_can_view_chat_show_optimized_and_lazy_modes(): void

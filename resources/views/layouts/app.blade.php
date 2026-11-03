@@ -4,12 +4,17 @@
         'overview' => 'Overview',
         'findings' => 'Findings',
         'evidence' => 'Evidence',
-        'trace' => 'Investigation trace',
-        'activity' => 'Activity log',
+        'trace' => 'Trace',
+        'activity' => 'Activity',
         'report' => 'Report',
     ];
     $user = Auth::user();
-    $initials = collect(preg_split('/\s+/', trim(preg_replace('/\(.*\)/', '', $user->name))))->filter()->take(2)->map(fn ($p) => mb_strtoupper(mb_substr($p, 0, 1)))->implode('');
+    $displayName = trim(preg_replace('/\s*\(.*\)/', '', $user->name));
+    $initials = collect(preg_split('/\s+/', $displayName))->filter()->take(2)->map(fn ($p) => mb_strtoupper(mb_substr($p, 0, 1)))->implode('');
+    $links = [
+        ['label' => 'Agent', 'href' => route('chat.index'), 'active' => request()->routeIs('chat.*')],
+        ['label' => 'Investigations', 'href' => route('investigations.index'), 'active' => $onWorkspace],
+    ];
 @endphp
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
@@ -17,64 +22,88 @@
     @include('layouts.partials.head', ['title' => $title ?? ''])
     {{ $head ?? '' }}
 </head>
-<body>
-<aside class="sidebar">
-    <a class="brand" href="{{ route('chat.index') }}" aria-label="AEGIS home"><span class="logo">A</span>AEGIS</a>
-    <p class="brand-description">Agentic Security<br>Investigation System</p>
+<body class="has-nav">
+@include('layouts.partials.icons')
+<a class="skip-link" href="#main">Skip to content</a>
 
-    <p class="nav-label">AGENT</p>
-    <nav aria-label="Agent">
-        <a class="nav {{ request()->routeIs('chat.*') ? 'active' : '' }}" href="{{ route('chat.index') }}">Conversations</a>
-    </nav>
+<div class="statusbar" role="status">
+    <div class="statusbar-inner">
+        <span class="statusbar-scope"><span>{{ $environment ?? 'SIGNED LAB SCOPE' }}</span></span>
+        <span class="statusbar-crumb">{{ $section ?? 'Workspace' }} / <b id="breadcrumb">{{ $breadcrumb ?? 'Overview' }}</b></span>
+        <span class="statusbar-model" title="Language model used by the agent">MODEL {{ config('agent.llm.model') }}</span>
+        <span class="statusbar-agent"><i class="agent-dot" aria-hidden="true"></i><span id="agent-status">AGENT IDLE</span></span>
+    </div>
+</div>
 
-    <p class="nav-label">WORKSPACE</p>
-    <nav aria-label="Investigation workspace">
-        @foreach ($workspaceViews as $key => $label)
-            @if ($onWorkspace)
-                <button class="nav {{ $key === 'overview' ? 'active' : '' }}" data-view="{{ $key }}">{{ $label }}</button>
-            @else
-                <a class="nav" href="{{ route('investigations.index', ['view' => $key]) }}">{{ $label }}</a>
-            @endif
-        @endforeach
-    </nav>
+<header class="topnav" x-data="{ menu: false }" @keydown.escape.window="if (menu) { menu = false; $refs.menuButton.focus() }">
+    <div class="topnav-inner">
+        <a class="brand" href="{{ route('chat.index') }}" aria-label="AEGIS home">
+            <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8 3v6.2c0 4.4-3.1 8-8 9.8-4.9-1.8-8-5.4-8-9.8V5.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8.5 12l2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>AEGIS</span>
+        </a>
 
-    <div class="sidebar-bottom">
-        <label class="small-label" for="theme">APPEARANCE</label>
-        <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-        <div class="local-indicator" title="Language model used by the agent"><i></i> {{ config('agent.llm.model') }}</div>
-        <div class="profile">
-            <span class="avatar">{{ $initials ?: '?' }}</span>
-            <div class="profile-name">
-                {{ preg_replace('/\s*\(.*\)/', '', $user->name) }}
-                <small><a href="{{ route('profile.edit') }}">Profile</a> ·
-                    <form method="POST" action="{{ route('logout') }}" style="display:inline">@csrf<button type="submit">Log out</button></form>
-                </small>
+        <nav class="topnav-links" aria-label="Main">
+            @foreach ($links as $link)
+                <a class="toplink {{ $link['active'] ? 'active' : '' }}" href="{{ $link['href'] }}" @if($link['active']) aria-current="page" @endif>{{ $link['label'] }}</a>
+            @endforeach
+        </nav>
+
+        <div class="topnav-actions">
+            <button type="button" class="icon-btn" id="theme-toggle" aria-label="Switch to light theme" title="Switch theme">
+                <svg class="icon icon-sun" aria-hidden="true"><use href="#i-sun"/></svg>
+                <svg class="icon icon-moon" aria-hidden="true"><use href="#i-moon"/></svg>
+            </button>
+            <div class="usermenu" @click.outside="menu = false">
+                <button type="button" class="user-pill" x-ref="menuButton" @click="menu = !menu" :aria-expanded="menu" aria-haspopup="menu" aria-controls="user-menu">
+                    <span class="user-initials">{{ $initials ?: '?' }}</span>
+                    <svg class="icon icon-chevron" :class="{ 'is-open': menu }" aria-hidden="true"><use href="#i-chevron"/></svg>
+                    <span class="sr-only">Account menu for {{ $displayName }}</span>
+                </button>
+                <div id="user-menu" class="menu" role="menu" x-show="menu" x-cloak
+                     x-transition:enter="menu-enter" x-transition:enter-start="menu-from" x-transition:enter-end="menu-to"
+                     x-transition:leave="menu-leave" x-transition:leave-start="menu-to" x-transition:leave-end="menu-from">
+                    <p class="menu-name">{{ $displayName }}<small>{{ $user->email }}</small></p>
+                    <a role="menuitem" href="{{ route('profile.edit') }}">Profile and password</a>
+                    <form method="POST" action="{{ route('logout') }}" data-pending="Logging out…">
+                        @csrf
+                        <button role="menuitem" type="submit">Log out</button>
+                    </form>
+                </div>
             </div>
         </div>
     </div>
-</aside>
+</header>
 
-<div class="shell">
-    <header class="topbar">
-        <div>{{ $section ?? 'Workspace' }} <span>/</span> <b id="breadcrumb">{{ $breadcrumb ?? 'Overview' }}</b></div>
-        <span class="environment"><i></i> {{ $environment ?? 'SIGNED LAB SCOPE' }}</span>
-    </header>
-    <main>
+<div class="frame">
+    <main id="main" tabindex="-1">
         @isset($header)
             <div class="page-heading"><div>{{ $header }}</div></div>
         @endisset
 
-        @if (session('status') && ! request()->routeIs('profile.*'))
-            <div class="flash" role="status">{{ session('status') }}</div>
-        @endif
-        @if (session('error'))
-            <div class="flash error" role="alert">{{ session('error') }}</div>
+        @if ($onWorkspace)
+            {{-- Tab strip: workspace.js switches the view without reloading. --}}
+            <div class="tabs-wrap">
+                <nav class="tabs" aria-label="Investigation views">
+                    @foreach ($workspaceViews as $key => $label)
+                        <button type="button" class="nav tab {{ $key === 'overview' ? 'active' : '' }}" data-view="{{ $key }}">{{ $label }}</button>
+                    @endforeach
+                </nav>
+            </div>
         @endif
 
         {{ $slot }}
 
-        <footer><span>AEGIS · Agentic Security Investigation System</span><span>Kelompok 6 · PBKK</span></footer>
+        <footer class="legal"><span>AEGIS · Agentic Security Investigation System</span><span>Kelompok 6 · PBKK</span></footer>
     </main>
+</div>
+
+<div class="toasts" aria-live="polite" id="toasts">
+    @if (session('status') && ! request()->routeIs('profile.*'))
+        <div class="toast ok" role="status" data-autodismiss="6000"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><span>{{ session('status') }}</span><button type="button" class="toast-close" aria-label="Dismiss"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+    @endif
+    @if (session('error'))
+        <div class="toast bad" role="alert"><svg class="icon" aria-hidden="true"><use href="#i-warn"/></svg><span>{{ session('error') }}</span><button type="button" class="toast-close" aria-label="Dismiss"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+    @endif
 </div>
 {{ $scripts ?? '' }}
 </body>

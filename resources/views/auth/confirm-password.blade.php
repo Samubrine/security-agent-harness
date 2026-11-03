@@ -1,9 +1,13 @@
 <x-guest-layout>
+    <x-slot name="title">Confirm your password</x-slot>
+    <x-slot name="heading">Confirm your password</x-slot>
+    <x-slot name="lead">This area needs your password again.</x-slot>
+
     <div class="hint" style="margin-bottom:16px">
         {{ __('This is a secure area of the application. Please confirm your password before continuing.') }}
     </div>
 
-    <form method="POST" action="{{ route('password.confirm') }}">
+    <form method="POST" action="{{ route('password.confirm') }}" data-validate data-pending="Confirming">
         @csrf
 
         <!-- Password -->

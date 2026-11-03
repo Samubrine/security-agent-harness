@@ -14,7 +14,7 @@
     <p class="action-resolved">This question was not answered.</p>
 @elseif (($action['type'] ?? '') === 'approval')
     <div class="action-card">
-        <div class="steps-title"><span>APPROVAL NEEDED</span><span>policy verdict: ask</span></div>
+        <div class="steps-title"><span><svg class="icon" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px"><use href="#i-warn"/></svg> Approval needed</span><span>policy verdict: ask</span></div>
         <div class="action-body">
             <p>The harness skipped {{ count($action['requests'] ?? []) === 1 ? 'one step' : count($action['requests']).' steps' }} of the {{ $skill }}{{ ! empty($action['target']) ? ' on '.$action['target'] : '' }} because a person has to approve {{ count($action['requests'] ?? []) === 1 ? 'it' : 'them' }} first:</p>
             <ul>
@@ -26,12 +26,12 @@
                 <form method="POST" action="{{ route('chat.resolve', [$message->chat_session_id, $message->id]) }}" @submit.prevent="run($el)">
                     @csrf
                     <input type="hidden" name="decision" value="approve">
-                    <button class="button primary" type="submit" :disabled="busy">Approve and run again</button>
+                    <button class="button primary" type="submit" :disabled="busy" :class="{ 'is-loading': busy }"><span>Approve and run again</span></button>
                 </form>
                 <form method="POST" action="{{ route('chat.resolve', [$message->chat_session_id, $message->id]) }}" @submit.prevent="run($el)">
                     @csrf
                     <input type="hidden" name="decision" value="decline">
-                    <button class="button" type="submit" :disabled="busy">Decline</button>
+                    <button class="button" type="submit" :disabled="busy" :class="{ 'is-loading': busy }"><span>Decline</span></button>
                 </form>
             </div>
             <p class="hint">Approving answers “yes” to exactly these requests for one rerun. Anything new the rerun asks for is still declined.</p>
@@ -39,8 +39,8 @@
     </div>
 @elseif (($action['type'] ?? '') === 'context')
     @php $field = $action['fields'][0] ?? ['name' => 'target', 'label' => 'Which target?', 'options' => []]; @endphp
-    <div class="action-card">
-        <div class="steps-title"><span>ONE DETAIL NEEDED</span><span>{{ $skill }}</span></div>
+    <div class="action-card is-context">
+        <div class="steps-title"><span>One detail needed</span><span>{{ $skill }}</span></div>
         <form class="action-body" method="POST" action="{{ route('chat.resolve', [$message->chat_session_id, $message->id]) }}" @submit.prevent="run($el)">
             @csrf
             <label class="small-label field-label" for="ctx-{{ $message->id }}">{{ $field['label'] }}</label>
@@ -50,7 +50,7 @@
                         <option value="{{ $option }}">{{ $option }}</option>
                     @endforeach
                 </select>
-                <button class="button primary" type="submit" :disabled="busy">Continue</button>
+                <button class="button primary" type="submit" :disabled="busy" :class="{ 'is-loading': busy }"><span>Continue</span></button>
             </div>
             <p class="hint">Options come from the signed scope, so only authorised targets can be chosen.</p>
         </form>

@@ -4,12 +4,41 @@
 // the browser cannot stream, the form is submitted normally and the page waits as before.
 export default () => ({
     busy: false,
+    sent: false,
+    invalid: false,
     steps: [],
     error: null,
+    status: 'The agent is working.',
+    lastForm: null,
+    clock: null,
+
+    // Keep the elapsed-time label current while a turn runs (text only, no animation).
+    startClock() {
+        const began = Date.now();
+        const tick = () => {
+            const mains = this.steps.filter((s) => s.kind === 'main').length;
+            this.status = `Step ${Math.max(1, mains)} · ${Math.round((Date.now() - began) / 1000)}s`;
+        };
+        tick();
+        this.clock = setInterval(tick, 1000);
+    },
+    stop(state) {
+        clearInterval(this.clock);
+        this.busy = false;
+        window.aegis?.agent('idle');
+        if (state === 'error') window.aegis?.announce('The agent could not finish. ' + (this.error || ''));
+    },
+    retry() { if (this.lastForm) this.run(this.lastForm); },
 
     async run(form) {
         if (this.busy) return;
-        if (form.content && form.content.value.trim().length < 2) return;
+        if (form.content && form.content.value.trim().length < 2) {
+            this.invalid = true;
+            form.content.focus();
+            return;
+        }
+        this.invalid = false;
+        this.lastForm = form;
         if (!window.fetch || !window.ReadableStream || !window.TextDecoder) {
             this.busy = true;
             form.submit();
@@ -18,6 +47,9 @@ export default () => ({
         this.busy = true;
         this.steps = [];
         this.error = null;
+        window.aegis?.agent('busy');
+        window.aegis?.announce('The agent is working.');
+        this.startClock();
         this.$nextTick(() => this.$refs.live?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
         try {
             const res = await fetch(form.action, {
@@ -44,20 +76,23 @@ export default () => ({
                 }
             }
         } catch (e) {
-            this.error = 'Lost the connection while the agent was working. Reload the page to see whether it finished.';
-            this.busy = false;
+            this.error = 'Lost the connection while the agent was working. Your message is kept. Try again, or reload to see whether it finished.';
+            this.stop('error');
         }
     },
 
     handle(event) {
         if (event.type === 'done') {
             this.steps.forEach((s) => { if (s.state === 'active') s.state = 'done'; });
-            window.location.assign(event.url);
+            clearInterval(this.clock);
+            this.sent = true;
+            window.aegis?.announce('Answer ready.');
+            setTimeout(() => window.location.assign(event.url), 350);
             return;
         }
         if (event.type === 'error') {
             this.error = event.message;
-            this.busy = false;
+            this.stop('error');
             return;
         }
         if (!event.label) return;
