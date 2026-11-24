@@ -40,7 +40,8 @@ return [
     ],
 
     // Optional CA bundle (PEM) for outgoing HTTPS. Set by scripts/setup.py when PHP has none.
-    'ca_bundle' => env('AGENT_CA_BUNDLE'),
+    // Automatically falls back to storage/app/cacert.pem without requiring modifications to .env.
+    'ca_bundle' => env('AGENT_CA_BUNDLE') ?: (file_exists(storage_path('app/cacert.pem')) ? storage_path('app/cacert.pem') : null),
 
     // Hard stop for the agent loop: at most this many LLM turns per user message.
     'max_steps' => (int) env('AGENT_MAX_STEPS', 6),

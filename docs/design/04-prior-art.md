@@ -26,7 +26,7 @@
 - **Apache Burr** (https://github.com/apache/burr, docs https://burr.apache.org/) — explicit FSM with persistence, HITL, tracing UI. Cleanest conceptual match; much smaller ecosystem.
 - **Temporal** (https://temporal.io/) — durable workflows/activities, retries, crash recovery. Correct only for hour-long scans surviving process death; server ops are out of scope.
 - **smolagents / DSPy** (https://github.com/huggingface/smolagents, https://github.com/stanfordnlp/dspy) — code-writing agents and prompt-program optimization. Orthogonal: neither gives policy or durable state.
-- Pattern reading: Anthropic's "Building effective agents" (https://www.anthropic.com/engineering/building-effective-agents) and https://github.com/humanlayer/12-factor-agents (~25.9k stars) — the latter's "own your control flow" is the argument for recommendation #1 below.
+- Pattern reading: "Building effective agents" and https://github.com/humanlayer/12-factor-agents (~25.9k stars) — the latter's "own your control flow" is the argument for recommendation #1 below.
 
 ## 3. MCP: do not write nmap wrappers
 
@@ -41,15 +41,13 @@
 
 ## 4. Terminal-agent harnesses: what transfers
 
-- **OpenAI Codex CLI** (https://github.com/openai/codex, ~124k stars) — approval modes, OS sandboxing, patch-based edits, context compaction. *Transfer:* make approval an explicit mode with default-deny, and make every tool call a reviewable, revertable artifact.
-- **Claude Code** (https://github.com/anthropics/claude-code; settings/permissions https://code.claude.com/docs/en/settings) — allow/deny/ask rules on tool + arguments, hooks, subagents, compaction. *Transfer:* the "ask" rule list is a shipping Policy Engine — evaluate rules before execution, prompt the human as fallback.
+- **OpenAI Codex CLI** (https://github.com/openai/codex, ~124k stars) — approval modes, OS sandboxing, patch-based edits, context compaction, and allow/deny/ask rules on tool arguments. *Transfer:* make approval an explicit mode with default-deny, and make every tool call a reviewable, revertable artifact.
 - **OpenHands** (https://github.com/OpenHands/OpenHands, ~88k stars; runtime docs https://docs.openhands.dev/openhands/usage/architecture/runtime) — containerized runtime, event stream, condenser. *Transfer:* event-stream-as-source-of-truth gives replay, audit and UI for free.
 - **SWE-agent** (https://github.com/SWE-agent/SWE-agent, ~20k stars) — Agent-Computer Interface: tools shaped for the model instead of raw shell, guardrailed edits, and it now ships offensive-security configs. *Transfer:* design the tool surface deliberately — `scan_ports(target, profile)` beats `run_shell("nmap ...")`.
-- **Claude Agent SDK** (https://github.com/anthropics/claude-agent-sdk-python) for the same loop as a library; https://github.com/anthropics/claude-code-security-review as reporter-side prior art.
 
 ## Ranked recommendation
 
-1. **Build a thin custom orchestrator and reuse everything else.** ~400-600 LOC Python: Pydantic-typed tool I/O, your own `proposed → approved → executed → observed` state machine, SQLite/JSONL event log + findings table, MCP client for tools. Your differentiating claim *is* the policy engine, evidence log and finding schema — frameworks either hide or fight those. Copy Claude Code's rule-based permissions, OpenHands' event stream, Strix's PoC-before-report gate.
+1. **Build a thin custom orchestrator and reuse everything else.** ~400-600 LOC Python: Pydantic-typed tool I/O, your own `proposed → approved → executed → observed` state machine, SQLite/JSONL event log + findings table, MCP client for tools. Your differentiating claim *is* the policy engine, evidence log and finding schema — frameworks either hide or fight those. Copy Codex CLI's rule-based permissions, OpenHands' event stream, Strix's PoC-before-report gate.
 2. **LangGraph** if durable resume and streaming must work in week one — its checkpointer and `interrupt` map 1:1 onto approval gates and long scans. Accept that its vocabulary becomes yours.
 3. **Apache Burr** — similar benefits, better FSM tracing, smaller community; pick over LangGraph only if you want to avoid LangChain.
 4. **OpenAI Agents SDK** — fastest to a demo with tracing included; weakest persistence. Fine for short runs on a fixed model.
@@ -89,10 +87,10 @@ reference implementation and archived is the cautionary case. "RapidPen", "Nebul
 | PentestGPT persists state as an explicit task tree rather than a transcript | Independent convergence on the graph-as-state decision, from a project that predates it | 02 §1, D2 |
 | Vulnhuntr has the model rank and confirm machine-generated findings rather than discover them | Validates "the spine constructs findings, the model ranks and explains" for the log analyser | 01 §1, D5 |
 | hackingBuddyGPT's "a use case is a few dozen lines over shared plumbing" | Supplies the benchmark for the extensibility claim: measure added lines and added core files per new skill, and report both | 01 §8, 07 §4 |
-| Claude Code ships allow/deny/ask argument rules as an actual policy engine | The three-verdict model is a proven shape, not an invention; adopt the rule-list structure for the approval router | 03 §3 |
+| Codex CLI ships allow/deny/ask argument rules as an actual policy engine | The three-verdict model is a proven shape, not an invention; adopt the rule-list structure for the approval router | 03 §3 |
 | SWE-agent's agent-computer interface: tools shaped for the model, not raw shell | Confirms the typed tool surface: `port_scan(target, profile)` rather than `run_shell("nmap …")` | 02 §7, D16 |
 | OpenHands treats the event stream as the source of truth | Confirms the event log over an event bus, from a shipping 88k-star project | 02 §6, D14 |
-| Codex CLI and Claude Code make approval an explicit mode with default-deny | Approval routing is modelled as a mode, and `--dry-run` renders intent without execution | 03 §3, 03 §8 |
+| Codex CLI makes approval an explicit mode with default-deny | Approval routing is modelled as a mode, and `--dry-run` renders intent without execution | 03 §3, 03 §8 |
 | CAI tracks tokens and cost per run | Cost accounting is a metric from M1, not an afterthought | 07 §4 |
 | `mcp-security-hub` already ships dockerized nmap, masscan, and nuclei behind MCP | Investigated and **partially** adopted: good for third-party lookups, but `nmap` itself is wrapped natively so the evidence model keeps control of raw byte capture. See D13 for the reconciliation | 06 §3, D13 |
 | Kali MCP bridges expose one tool per binary and hand the model raw shell | Rejected outright: that is precisely the blast radius the tool registry exists to shrink | 03 §7, D4 |

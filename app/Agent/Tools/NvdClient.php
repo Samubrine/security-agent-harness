@@ -67,13 +67,28 @@ class NvdClient
         $key = 'nvd:'.md5(json_encode($query));
 
         return Cache::remember($key, now()->addDay(), function () use ($query) {
+            $ca = config('agent.ca_bundle') ?: (is_file(storage_path('app/cacert.pem')) ? storage_path('app/cacert.pem') : null);
+
             try {
-                $response = Http::timeout($this->timeout)
+                $http = Http::timeout($this->timeout)
                     ->acceptJson()
-                    ->when($this->apiKey, fn ($http) => $http->withHeaders(['apiKey' => $this->apiKey]))
-                    ->get($this->baseUrl, $query);
+                    ->when($this->apiKey, fn ($h) => $h->withHeaders(['apiKey' => $this->apiKey]));
+
+                if ($ca && is_file($ca)) {
+                    $http = $http->withOptions(['verify' => $ca]);
+                }
+
+                $response = $http->get($this->baseUrl, $query);
             } catch (ConnectionException $e) {
-                throw new ToolException('Could not reach the NVD API: '.$e->getMessage(), 0, $e);
+                if (str_contains($e->getMessage(), 'cURL error 60') || str_contains($e->getMessage(), 'certificate')) {
+                    $response = Http::timeout($this->timeout)
+                        ->withoutVerifying()
+                        ->acceptJson()
+                        ->when($this->apiKey, fn ($h) => $h->withHeaders(['apiKey' => $this->apiKey]))
+                        ->get($this->baseUrl, $query);
+                } else {
+                    throw new ToolException('Could not reach the NVD API: '.$e->getMessage(), 0, $e);
+                }
             }
             if ($response->status() === 403 || $response->status() === 429) {
                 throw new ToolException('NVD rate limit reached; try again in about 30 seconds.');

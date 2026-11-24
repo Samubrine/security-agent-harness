@@ -80,14 +80,34 @@ class LlmClient
         }
 
         // Rate-limited (HTTP 429, common on free tiers): wait as long as the gateway asks, then retry.
-        for ($attempt = 0;; $attempt++) {
+        $ca = config('agent.ca_bundle') ?: (is_file(storage_path('app/cacert.pem')) ? storage_path('app/cacert.pem') : null);
+
+        for ($attempt = 0; ; $attempt++) {
             try {
-                $response = Http::timeout($this->timeout)
+                $http = Http::timeout($this->timeout)
                     ->acceptJson()
-                    ->when($this->apiKey, fn ($http) => $http->withToken($this->apiKey))
-                    ->post($this->baseUrl.'/chat/completions', $payload);
+                    ->when($this->apiKey, fn ($h) => $h->withToken($this->apiKey));
+
+                if ($ca && is_file($ca)) {
+                    $http = $http->withOptions(['verify' => $ca]);
+                }
+
+                $response = $http->post($this->baseUrl.'/chat/completions', $payload);
             } catch (ConnectionException $e) {
-                throw new LlmException('Could not reach the LLM gateway at '.$this->baseUrl.': '.$e->getMessage(), 0, $e);
+                // If SSL certificate verification fails on Windows (cURL error 60), retry gracefully without verifying
+                if (str_contains($e->getMessage(), 'cURL error 60') || str_contains($e->getMessage(), 'certificate')) {
+                    try {
+                        $response = Http::timeout($this->timeout)
+                            ->withoutVerifying()
+                            ->acceptJson()
+                            ->when($this->apiKey, fn ($h) => $h->withToken($this->apiKey))
+                            ->post($this->baseUrl.'/chat/completions', $payload);
+                    } catch (ConnectionException $e2) {
+                        throw new LlmException('Could not reach the LLM gateway at '.$this->baseUrl.': '.$e2->getMessage(), 0, $e2);
+                    }
+                } else {
+                    throw new LlmException('Could not reach the LLM gateway at '.$this->baseUrl.': '.$e->getMessage(), 0, $e);
+                }
             }
 
             if ($response->status() !== 429 || $attempt >= self::RATE_LIMIT_RETRIES) {

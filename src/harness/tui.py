@@ -1,6 +1,6 @@
 """Interactive Terminal User Interface (TUI / REPL) for security-agent-harness.
 
-Provides a modern, interactive console experience (similar to Claude Code, Codex, and DeepSeek harness)
+Provides a modern, interactive console experience
 with live execution HUD, slash commands, model auto-detection/BYOK, tool/MCP inspection,
 and immediate feedback.
 """
@@ -323,7 +323,7 @@ class InteractiveSession:
             self.config.default_backend = bname
             default_models = {
                 "deepseek": "deepseek-chat",
-                "openrouter": "anthropic/claude-3.5-sonnet",
+                "openrouter": "qwen/qwen-2.5-72b-instruct",
                 "groq": "llama-3.3-70b-versatile",
                 "openai": "gpt-4o",
             }

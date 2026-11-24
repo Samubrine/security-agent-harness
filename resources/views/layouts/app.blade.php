@@ -12,8 +12,9 @@
     $displayName = trim(preg_replace('/\s*\(.*\)/', '', $user->name));
     $initials = collect(preg_split('/\s+/', $displayName))->filter()->take(2)->map(fn ($p) => mb_strtoupper(mb_substr($p, 0, 1)))->implode('');
     $links = [
-        ['label' => 'Agent', 'href' => route('chat.index'), 'active' => request()->routeIs('chat.*')],
+        ['label' => 'Agent Workspace', 'href' => route('chat.index'), 'active' => request()->routeIs('chat.*')],
         ['label' => 'Investigations', 'href' => route('investigations.index'), 'active' => $onWorkspace],
+        ['label' => 'Demo Soal 1: Cari Mahasiswa', 'href' => route('mahasiswa.index'), 'active' => request()->routeIs('mahasiswa.*')],
     ];
 @endphp
 <!DOCTYPE html>
@@ -21,6 +22,7 @@
 <head>
     @include('layouts.partials.head', ['title' => $title ?? ''])
     {{ $head ?? '' }}
+    @livewireStyles
 </head>
 <body class="has-nav">
 @include('layouts.partials.icons')
@@ -106,5 +108,6 @@
     @endif
 </div>
 {{ $scripts ?? '' }}
+@livewireScripts
 </body>
 </html>

@@ -169,7 +169,7 @@ def test_build_client_backend_aliases_defaults() -> None:
 
     or_client = build_client(
         backend="openrouter",
-        model_id="anthropic/claude-3.5-sonnet",
+        model_id="qwen/qwen-2.5-72b-instruct",
         allow_remote=True,
         api_key="sk-or",
     )

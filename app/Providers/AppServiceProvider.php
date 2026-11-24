@@ -5,11 +5,11 @@ namespace App\Providers;
 use App\Agent\AgentRunner;
 use App\Agent\ApprovalLedger;
 use App\Agent\ClaimChecker;
-use App\Agent\Progress;
 use App\Agent\Harness\HarnessRunner;
 use App\Agent\Harness\RunArchive;
 use App\Agent\Harness\SkillCatalog;
 use App\Agent\LlmClient;
+use App\Agent\Progress;
 use App\Agent\SystemPrompt;
 use App\Agent\ToolRegistry;
 use App\Agent\Tools\GetInvestigationTool;
@@ -66,7 +66,22 @@ class AppServiceProvider extends ServiceProvider
     {
         // PHP on Windows often ships without a CA bundle (cURL error 60). scripts/setup.py downloads
         // one and sets AGENT_CA_BUNDLE, so teammates never have to edit php.ini.
-        $bundle = config('agent.ca_bundle');
+        $bundle = config('agent.ca_bundle')
+            ?: (is_file(storage_path('app/cacert.pem')) ? storage_path('app/cacert.pem') : null);
+
+        if (! $bundle && PHP_OS_FAMILY === 'Windows') {
+            $candidates = [
+                getenv('APPDATA').DIRECTORY_SEPARATOR.'Python'.DIRECTORY_SEPARATOR.'Python313'.DIRECTORY_SEPARATOR.'site-packages'.DIRECTORY_SEPARATOR.'certifi'.DIRECTORY_SEPARATOR.'cacert.pem',
+                getenv('LOCALAPPDATA').DIRECTORY_SEPARATOR.'Programs'.DIRECTORY_SEPARATOR.'Python'.DIRECTORY_SEPARATOR.'Python313'.DIRECTORY_SEPARATOR.'Lib'.DIRECTORY_SEPARATOR.'site-packages'.DIRECTORY_SEPARATOR.'certifi'.DIRECTORY_SEPARATOR.'cacert.pem',
+            ];
+            foreach ($candidates as $cand) {
+                if (is_file($cand)) {
+                    $bundle = $cand;
+                    break;
+                }
+            }
+        }
+
         if ($bundle && is_file($bundle)) {
             Http::globalOptions(['verify' => $bundle]);
         }

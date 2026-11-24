@@ -1,3 +1,5 @@
+@import './livewire-agentic.css';
+
 /* AEGIS interface. Implements design.md: a dark security console drawn on graph paper, one green light on.
  * Sections: tokens · base · shell · type · controls · bands · lists · chat · workspace · auth · feedback · motion. */
 

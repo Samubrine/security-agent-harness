@@ -21,6 +21,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/chat/{id}/message', [ChatSessionController::class, 'sendMessage'])->name('chat.message');
     Route::post('/chat/{id}/messages/{message}/resolve', [ChatSessionController::class, 'resolveAction'])->name('chat.resolve');
 
+    // Livewire Pertemuan 12: Soal 1 (Pencarian Mahasiswa Real-Time Tanpa Tombol)
+    Route::get('/mahasiswa', fn () => view('mahasiswa.index'))->name('mahasiswa.index');
+
     // Investigation workspace (the harness dashboard) and its JSON records
     Route::get('/investigations', [InvestigationController::class, 'index'])->name('investigations.index');
     Route::post('/investigations', [InvestigationController::class, 'store'])->name('investigations.store');

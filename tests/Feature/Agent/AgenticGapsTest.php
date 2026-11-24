@@ -11,6 +11,8 @@ use App\Agent\Tools\RunInvestigationTool;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
 use App\Models\EvidenceArtifact;
+use App\Models\KnowledgeSource;
+use App\Models\ToolExecutionLog;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Process\PendingProcess;
@@ -205,7 +207,7 @@ class AgenticGapsTest extends TestCase
         $this->fakeHarness();
         Http::fake(['llm.test/*' => Http::sequence()
             ->push($this->llmReply('', [['run_investigation', ['skill' => 'port_scan', 'target' => 'lab-web-01', 'objective' => 'x']]]))
-            ->push($this->llmReply("Tomcat has CVE-2020-1938 (CVSS 9.8). CVE-2099-0001 is bad too. CVE-2021-23017 scores 9.9 out of 10. Run run-20990101T000000-zzzz agrees."))]);
+            ->push($this->llmReply('Tomcat has CVE-2020-1938 (CVSS 9.8). CVE-2099-0001 is bad too. CVE-2021-23017 scores 9.9 out of 10. Run run-20990101T000000-zzzz agrees.'))]);
 
         $reply = app(AgentRunner::class)->respond($this->chatWith(User::factory()->create(), 'Is lab-web-01 safe?'));
 
@@ -226,9 +228,9 @@ class AgenticGapsTest extends TestCase
     public function test_an_exploited_claim_is_checked_against_the_nvd_lookup(): void
     {
         $session = ChatSession::factory()->create();
-        $log = \App\Models\ToolExecutionLog::create(['chat_message_id' => ChatMessage::create(['chat_session_id' => $session->id, 'role' => 'assistant', 'content' => 'x', 'token_count' => 1, 'sequence_number' => 1])->id,
+        $log = ToolExecutionLog::create(['chat_message_id' => ChatMessage::create(['chat_session_id' => $session->id, 'role' => 'assistant', 'content' => 'x', 'token_count' => 1, 'sequence_number' => 1])->id,
             'tool_name' => 'lookup_cve', 'status' => 'success', 'input_parameters' => [], 'output_payload' => [], 'execution_time_ms' => 1,
-            'loggable_type' => \App\Models\KnowledgeSource::class, 'loggable_id' => 1]);
+            'loggable_type' => KnowledgeSource::class, 'loggable_id' => 1]);
         $content = ['id' => 'CVE-2023-38408', 'cvss_score' => 9.8, 'known_exploited' => false];
         EvidenceArtifact::create(['chat_session_id' => $session->id, 'tool_execution_log_id' => $log->id, 'kind' => 'lookup_cve', 'source' => 'nvd', 'sha256' => str_repeat('a', 64), 'content' => $content]);
 

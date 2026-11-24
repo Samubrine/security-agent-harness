@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+dist/
+build/
+*.whl
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -38,8 +41,7 @@ Homestead.yaml
 npm-debug.log
 yarn-error.log
 
-# Agent & AI instruction files (excluded from repository)
+# Instruction and configuration files
 AGENTS.md
-CLAUDE.md
 
 

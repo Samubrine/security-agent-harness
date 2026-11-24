@@ -303,6 +303,112 @@ Coba di chat: *"Was Tomcat on lab-web-01 really patched? Check against the asset
 
 ---
 
+## ⚡ Livewire: Antarmuka Chat/Prompt Reaktif (Tugas Pertemuan 12 - CPMK-3)
+
+### 🎯 Gambaran Umum & Arsitektur Agentic AI Workspace
+Pada checkpoint **Pertemuan 12 (CPMK-3)**, antarmuka obrolan Agentic AI AEGIS telah ditingkatkan menjadi workspace reaktif penuh menggunakan **Laravel Livewire**. Mengadopsi arsitektur split-panel mirip standar industri seperti **Antigravity**, **OpenCode**, dan **Cursor**, antarmuka ini memberikan interaktivitas tinggi tanpa penulisan ribuan baris boilerplate JavaScript SPA manual.
+
+```mermaid
+flowchart TD
+    subgraph Browser Client (Frontend Reaktif)
+        SidebarUI["ChatSidebar Component<br/>(Daftar Sesi & Modal Baru)"]
+        ChatUI["ChatBox Component<br/>(Two-Way Data Binding wire:model)"]
+        VisUI["CodeVisualizer Component<br/>(wire:poll.2s + Syntax Viewer)"]
+    end
+
+    subgraph Livewire 4 Event Bus
+        EV1["wire:dispatch('session-selected', id)"]
+        EV2["wire:dispatch('message-sent')"]
+        EV3["wire:dispatch('code-detected', code)"]
+    end
+
+    subgraph Laravel Backend (PHP 8.3 & Livewire)
+        LWSide["App\\Livewire\\ChatSidebar"]
+        LWChat["App\\Livewire\\ChatBox"]
+        LWVis["App\\Livewire\\CodeVisualizer"]
+        AgentCore["App\\Agent\\AgentRunner<br/>(Tool Loop & LLM Engine)"]
+    end
+
+    subgraph Relational Database (MySQL)
+        DBSessions[("chat_sessions")]
+        DBMessages[("chat_messages")]
+        DBLogs[("tool_execution_logs")]
+    end
+
+    SidebarUI -- "Klik Sesi" --> EV1
+    EV1 --> LWChat
+    LWChat -- "Eager Loading with()" --> DBMessages
+    ChatUI -- "Kirim Prompt (wire:loading)" --> LWChat
+    LWChat -- "Simpan Prompt Fisik" --> DBMessages
+    LWChat --> AgentCore
+    AgentCore -- "Eksekusi Alat" --> DBLogs
+    AgentCore -- "Balasan AI" --> DBMessages
+    LWChat -- "Refresh Sesi" --> EV2
+    EV2 --> LWSide
+    LWChat -- "Deteksi Blok Kode" --> EV3
+    EV3 --> LWVis
+    VisUI -- "Polling Status Otomatis" --> LWVis
+    LWVis -- "Cek Log Alat" --> DBLogs
+```
+
+---
+
+### 📋 Pemenuhan Kriteria Wajib Tugas Perkuliahan
+
+| Kriteria Wajib (Slide 35) | Spesifikasi Teknis | Implementasi di Repositori Ini | Status |
+|---|---|---|---|
+| **1. Komponen Kembar Livewire** | Minimal 2 komponen utama yang saling berinteraksi via Events (`wire:dispatch` & `#[On]`). | `App\Livewire\ChatSidebar` dan `App\Livewire\ChatBox` saling berkomunikasi: pemilihan sesi memicu `session-selected`, dan pengiriman pesan memicu `#[On('message-sent')]` untuk sinkronisasi instan daftar riwayat obrolan. | **TERPENUHI (100%)** |
+| **2. Keamanan Autentikasi Sesi** | Panel hanya boleh diakses pengguna login (Breeze), state terikat unik ke `user_id`. | Rute diproteksi middleware `['auth', 'verified']`. Di dalam method `mount()` dan `kirim()`, seluruh kueri database divalidasi dengan `whereBelongsTo(auth()->user())` untuk mencegah *cross-tenant data leakage*. | **TERPENUHI (100%)** |
+| **3. Proteksi UX Loading State** | Wajib memasang `wire:loading` pada submit untuk mematikan klik ganda saat AI berpikir. | Tombol kirim instruksi dilindungi `wire:loading.attr="disabled"`. Ditampilkan status indikator *"AI Sedang Memproses..."* saat AJAX aktif dan input box dibersihkan seketika (`$this->prompt = ''`). | **TERPENUHI (100%)** |
+| **4. Penyimpanan Database Fisik** | Seluruh prompt user dan respon AI wajib tersimpan berurutan ke MySQL via model `ChatMessage`. | Metode `kirim()` melakukan `ChatMessage::create()` secara fisik ke tabel MySQL relasional dengan role `user` dan `assistant`, mencatat `sequence_number` terurut serta `token_count`. | **TERPENUHI (100%)** |
+
+---
+
+### 🌟 Implementasi 3 Tantangan Ekstra / Challenge Value (Target Nilai A+)
+
+Sesuai instruksi pada **Slide 36**, seluruh 3 fitur eksplorasi tingkat tinggi berhasil diimplementasikan:
+
+1. **Challenge 1: Animasi Pengetikan Bertahap (SSE Typing Simulation)**
+   - Pada gelembung jawaban asisten AI terbaru, teks tidak muncul secara kaku seketika, melainkan dirender secara halus mengalir karakter demi karakter menggunakan integrasi direktif reaktif Alpine.js (`x-data="{ typing: true, rendered: '' }"`) dengan cursor blinking terminal `▋`.
+
+2. **Challenge 2: Split-Panel Code Visualizer & Syntax Highlighter**
+   - Halaman obrolan dirancang dengan layout modular split-panel 3-kolom bergaya *Agentic AI Code Editor*.
+   - Saat asisten AI mengirimkan jawaban yang memuat blok kode (misal ` ```python `, ` ```bash `, ` ```php `, ` ```json `), komponen `CodeVisualizer` mendeteksi dan mengekstrak kode tersebut secara otomatis via event `code-detected`, lalu menampilkannya di panel kanan dengan format tag `<pre>` monospaced, tab nama file virtual, indikator baris, serta tombol copy instan.
+
+3. **Challenge 3: Real-Time Server Polling (`wire:poll`)**
+   - Panel visualizer dilengkapi widget pemantau status eksekusi tool berdurasi panjang (seperti Nmap port scan atau analisis hash integritas berkas) yang memanfaatkan atribut `wire:poll.2s="pollToolStatus"`.
+   - Browser secara berkala memeriksa status pada tabel `tool_execution_logs` di latar belakang server, memperbarui progress bar dinamis, badge status (`STANDBY`, `MEMINDAI`, `SUKSES`, `GAGAL`), serta waktu cek server terakhir (`H:i:s`) tanpa intervensi reload pengguna.
+
+---
+
+### 🎨 Penerapan Prinsip Desain `/antislop-ui`
+Sesuai panduan *Anti-Slop UI* (`antislop-ui.md` & `design.md`):
+- **Bebas Slop Generik:** Tidak menggunakan gradien ungu-biru (*no generic blue-purple gradients*), tidak ada sudut melengkung berlebihan (*no excessive pill radii*), dan tidak ada bayangan kabur melayang (*no floating drop shadows*).
+- **Palet Teknis AEGIS:** Latar belakang hitam kanvas `#080808`, panel kode `#000000`, garis bingkai tegas 1px `#161616`, serta aksen tunggal *security green* (`#27916b` / kontras teks `#34b386` memenuhi WCAG AA > 4.5:1).
+- **Animasi Bertujuan (R-19 & R-31):** Tidak ada animasi denyut hiasan tanpa henti (*no endless loop decorative pulses*); efek *pulse* hanya aktif saat status pemindaian benar-benar berjalan (`MEMINDAI`).
+
+---
+
+### 🧪 Verifikasi Pengujian & Standar PSR-12
+- Seluruh 8 test suite pengujian Livewire khusus pada [`tests/Feature/LivewireAgenticWorkspaceTest.php`](tests/Feature/LivewireAgenticWorkspaceTest.php) dinyatakan **100% PASS**:
+  ```text
+  PASS  Tests\Feature\LivewireAgenticWorkspaceTest
+  ✓ livewire components rendered on chat show
+  ✓ chat sidebar lists sessions and isolates user data
+  ✓ chat sidebar can create new session and dispatch event
+  ✓ chat sidebar validates required title
+  ✓ chat box validates prompt and tracks character count
+  ✓ chat box stores user prompt physically in database
+  ✓ code visualizer listens to code detected event
+  ✓ code visualizer polls tool status from database
+  
+  Tests: 8 passed (25 assertions)
+  ```
+- Seluruh rangkaian test suite aplikasi (78 pengujian, 305 asersi) lulus sempurna (`php artisan test`).
+- Seluruh berkas PHP telah diformat mematuhi standar PSR-12 menggunakan **Laravel Pint** (`./vendor/bin/pint`).
+
+---
+
 ### 🚀 Cara Menjalankan Aplikasi (Laravel + Harness + LLM)
 
 #### Cara cepat (disarankan untuk anggota kelompok)
